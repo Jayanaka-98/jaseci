@@ -4,7 +4,7 @@ Agentic AI applications represent the next evolution in software systems. This g
 
 Before diving into the development process, it’s important to understand what Agentic AI is and what building such systems entails.
 
-An **AI agent** is a software entity capable of autonomously performing actions using available resources to achieve defined goals.  
+An **AI agent** is a software entity capable of autonomously performing actions using available resources to achieve defined goals.
 In traditional systems, all tools and actions are explicitly defined by humans.
 
 **Agentic AI**, in contrast, refers to AI systems that can **independently plan, decide, and act** toward a goal using available tools and contextual information—**without** relying on a fixed, human-defined sequence of steps.
@@ -29,7 +29,7 @@ To demonstrate these capabilities, we built an agentic task manager application 
 
 The orchestrator (walker) receives a high-level user request, decomposes it into specialized subtasks using the LLM, and routes each subtask to the appropriate agent. Each agent executes independently using its own tools while maintaining a shared state through the object graph.
 
-Here's a visual representation of the architecture: 
+Here's a visual representation of the architecture:
 
 ```mermaid
 flowchart TD
@@ -250,14 +250,14 @@ walker task_manager {
     # Step 1: Plan - decompose the user's request
     subtasks = self.plan_tasks(self.utterance);
     print("[Planned Subtasks]:", subtasks);
-    
+
     # Step 2: Map agent types to node classes
     node_map = {
       RoutingNodes.TASK_HANDLING: TaskHandling,
       RoutingNodes.EMAIL_HANDLING: EmailHandling,
       RoutingNodes.GENERAL_CHAT: GeneralChat
     };
-    
+
     # Step 3: Execute - route and visit each agent
     for subtask in subtasks {
       node_type = node_map[subtask.agent_type];
