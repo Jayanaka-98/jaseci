@@ -357,44 +357,27 @@ impl MTIRGenPass._extract_method_info(
 
 """Get a unique scope string for a given scope node."""
 impl MTIRGenPass._get_scope_str(node: uni.UniScopeNode) -> str {
-    # For Module nodes, compute the full module path using the file path
+    # For Module nodes, use the absolute path (resolved) as the scope key base.
+    # This ensures consistent scope keys between compile time and runtime,
+    # since runtime can access the same absolute path via sys.modules['__main__'].__file__
     if isinstance(node, uni.Module) {
         mod_path = node.loc.mod_path;
-        # Use the entry point's directory as the base path for module resolution
-        # This matches how Python's __module__ is resolved at runtime
-        main_mod = self.prog.mod.main if self.prog and self.prog.mod else None;
-        if main_mod and main_mod.loc.mod_path {
-            base_path = str(Path(main_mod.loc.mod_path).parent);
-        } else {
-            base_path = Jac.base_path_dir;
-        }
-        if base_path and mod_path {
-            path = Path(mod_path);
-            base = Path(base_path);
-            try {
-                rel_path = path.relative_to(base);
-            } except ValueError {
-                # File not under base_path, use filename
-                rel_path = path;
+        if mod_path {
+            # Use resolved absolute path to ensure consistency across environments
+            abs_path = str(Path(mod_path).resolve());
+            # Remove .jac extension variants
+            if abs_path.endswith(".impl.jac") {
+                abs_path = abs_path[:-9];
+            } elif abs_path.endswith(".cl.jac") {
+                abs_path = abs_path[:-7];
+            } elif abs_path.endswith(".sv.jac") {
+                abs_path = abs_path[:-7];
+            } elif abs_path.endswith(".jac") {
+                abs_path = abs_path[:-4];
             }
-            # Remove .jac extension and convert path separators to dots
-            module_parts: list[str] = [];
-            for part in rel_path.parts {
-                if part.endswith(".jac") {
-                    module_parts.append(part[:-4]);
-                } elif part.endswith(".impl.jac") {
-                    module_parts.append(part[:-9]);
-                } elif part.endswith(".cl.jac") {
-                    module_parts.append(part[:-7]);
-                } elif part.endswith(".sv.jac") {
-                    module_parts.append(part[:-7]);
-                } else {
-                    module_parts.append(part);
-                }
-            }
-            return ".".join(module_parts);
+            return abs_path;
         }
-        # Fallback to scope_name if base_path is not available
+        # Fallback to scope_name if mod_path is not available
         return node.scope_name;
     }
     self_name = node.scope_name;
