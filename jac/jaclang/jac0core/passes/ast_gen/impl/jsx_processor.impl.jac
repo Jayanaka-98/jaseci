@@ -199,9 +199,11 @@ impl EsJsxProcessor.normal_attribute(
 
 """Process JSX text node."""
 impl EsJsxProcessor.text(self: EsJsxProcessor, nd: uni.JsxText) -> Expression {
+    import json;
     es = self.es;
+    text = nd.get_normalized_text();
     expr = self.pass_ref.sync_loc(
-        es.Literal(value=nd.get_normalized_text()), jac_node=nd
+        es.Literal(value=text, raw=json.dumps(text)), jac_node=nd
     );
     nd.gen.es_ast = expr;
     return expr;

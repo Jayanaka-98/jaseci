@@ -717,6 +717,40 @@ impl Lexer.scan_fstring_expr_token -> Token {
     return self.scan_regular_token();
 }
 
+"""Check if <identifier should be treated as JSX rather than less-than comparison.
+
+If the previous token could end an expression (identifier, number, closing bracket, etc.),
+then < is a comparison operator, not the start of a JSX element.
+When already inside a JSX context (jsx_depth > 0), always allow JSX since nested elements
+like <div> after {expr} should be treated as JSX, not comparisons.
+"""
+impl Lexer.can_start_jsx -> bool {
+    # Inside JSX content, always allow nested JSX elements
+    if self.jsx_depth > 0 {
+        return True;
+    }
+    if self.prev_token_kind is None {
+        return True;
+    }
+    # These tokens can end an expression, so < after them is a comparison operator
+    return self.prev_token_kind not in [
+        TokenKind.NAME,
+        TokenKind.KWESC_NAME,
+        TokenKind.INT,
+        TokenKind.FLOAT,
+        TokenKind.STRING,
+        TokenKind.BOOL,
+        TokenKind.NULL,
+        TokenKind.RPAREN,
+        TokenKind.RSQUARE,
+        TokenKind.RBRACE,
+        TokenKind.KW_SELF,
+        TokenKind.KW_SUPER,
+        TokenKind.JSX_SELF_CLOSE,
+        TokenKind.JSX_FRAG_CLOSE
+    ];
+}
+
 """Scan JSX opening tag start: consume < and enter tag mode."""
 impl Lexer.scan_jsx_open_start -> Token {
     start_line = self.line;
@@ -1117,6 +1151,10 @@ impl Lexer.scan_operator -> Token {
         );
     }
     if self.match_string("</>") {
+        self.jsx_depth -= 1;
+        if self.jsx_depth == 0 {
+            self.pop_mode();
+        }
         return self.make_token(
             TokenKind.JSX_FRAG_CLOSE, "</>", start_line, start_col, start_pos
         );
@@ -1283,6 +1321,8 @@ impl Lexer.scan_operator -> Token {
         );
     }
     if self.match_string("<>") {
+        self.jsx_depth += 1;
+        self.push_mode(LexerMode.JSX_CONTENT);
         return self.make_token(
             TokenKind.JSX_FRAG_OPEN, "<>", start_line, start_col, start_pos
         );
@@ -1478,7 +1518,9 @@ impl Lexer.next_token -> Token {
         return self.scan_kwesc_name();
     }
     # Check for JSX opening tag: <identifier
-    if ch == "<" and self.is_alpha(self.peek()) {
+    # Only treat as JSX if the previous token cannot end an expression.
+    # This prevents `i<points.length` from being parsed as JSX.
+    if ch == "<" and self.is_alpha(self.peek()) and self.can_start_jsx() {
         return self.scan_jsx_open_start();
     }
     # Identifier or keyword
@@ -1528,6 +1570,7 @@ impl Lexer.tokenize -> list[Token] {
     while True {
         token = self.next_token();
         tokens.append(token);
+        self.prev_token_kind = token.kind;
         if token.kind == TokenKind.EOF {
             break;
         }
