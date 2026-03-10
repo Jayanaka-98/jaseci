@@ -1,7 +1,7 @@
 [project]
 name = "jac-scale"
 version = "0.2.4"
-description = ""
+description = "Distributed deployment and scaling for Jac applications on Kubernetes"
 authors = [{ name = "Jason Mars", email = "jason@mars.ninja" }]
 readme = "README.md"
 requires-python = ">=3.12"
@@ -20,6 +20,11 @@ dependencies = [
     "python-multipart>=0.0.21,<1.0.0",
     "prometheus-client>=0.21.0,<1.0.0"
 ]
+
+[project.urls]
+Repository = "https://github.com/Jaseci-Labs/jaseci"
+Homepage = "https://jaseci.org"
+Documentation = "https://jac-lang.org"
 
 [project.entry-points."jac"]
 scale = "jac_scale.plugin:JacCmd"
