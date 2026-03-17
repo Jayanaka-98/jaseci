@@ -8,7 +8,7 @@ import from threading { Event }
 import from typing { TYPE_CHECKING }
 import jaclang.jac0core.unitree as uni;
 import from jaclang.jac0core.compile_options { CompileOptions }
-import from jaclang.jac0core.mtp { Info }
+import from jaclang.jac0core.mtp { Info, MtirMap }
 import from jaclang.jac0core.passes { Alert }
 
 with entry {

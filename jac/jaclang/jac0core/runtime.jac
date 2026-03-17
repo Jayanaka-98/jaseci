@@ -49,7 +49,7 @@ import from jaclang.jac0core.constructs {
     WalkerArchetype
 }
 import from jaclang.jac0core.modresolver { infer_language }
-import from jaclang.jac0core.mtp { MTIR, Info, MTRuntime }
+import from jaclang.jac0core.mtp { MTIR, Info, MTRuntime, MtirMap }
 import from jaclang.jac0core { plugin }
 
 with entry {
@@ -610,11 +610,14 @@ class JacByLLM {
         """
     static def default_llm -> object;
 
-    """Add MTIR to the node's MTIR map."""
-    static def add_mtir_to_map(scope: str, mtir: Info) -> None;
+    """Add MTIR to a module-specific MTIR map."""
+    static def add_mtir_to_map(module_path: str, scope: str, mtir: Info) -> None;
 
-    """Get MTIR from the node's MTIR map."""
+    """Get MTIR from the module maps by scope (searches all modules)."""
     static def get_mtir_from_map(scope: str) -> (Info | None);
+
+    """Get the MtirMap for a specific module."""
+    static def get_mtir_map_for_module(module_path: str) -> (MtirMap | None);
 }
 
 """Jac Machine Utilities."""

@@ -1,5 +1,6 @@
 """Meaning Typed Programming constructs for Jac Language."""
 import from collections.abc { Callable }
+import from dataclasses { field }
 
 """Runtime context for Meaning Typed Programming."""
 obj MTRuntime {
@@ -34,6 +35,36 @@ obj MTIR {
 obj Info {
     has name: str,
         semstr: (str | None);
+}
+
+"""MTIR map for a single module: scope -> Info."""
+obj MtirMap {
+    has entries: dict[(str, Info)] = field(default_factory=dict);
+
+    """Add an MTIR entry for a scope."""
+    def add(self: MtirMap, scope: str, info: Info) -> None {
+        self.entries[scope] = info;
+    }
+
+    """Get an MTIR entry by scope."""
+    def get(self: MtirMap, scope: str) -> (Info | None) {
+        return self.entries.get(scope);
+    }
+
+    """Check if scope exists."""
+    def contains(self: MtirMap, scope: str) -> bool {
+        return scope in self.entries;
+    }
+
+    """Get all entries."""
+    def items(self: MtirMap) -> object {
+        return self.entries.items();
+    }
+
+    """Get number of entries."""
+    def __len__(self: MtirMap) -> int {
+        return len(self.entries);
+    }
 }
 
 obj VarInfo(Info) {

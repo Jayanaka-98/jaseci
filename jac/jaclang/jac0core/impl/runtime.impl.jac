@@ -1877,23 +1877,39 @@ impl JacByLLM.default_llm -> object {
     return instance;
 }
 
-"""Add MTIR to the node's MTIR map."""
-impl JacByLLM.add_mtir_to_map(scope: str, mtir: Info) -> None {
+"""Add MTIR to a module-specific MTIR map."""
+impl JacByLLM.add_mtir_to_map(module_path: str, scope: str, mtir: Info) -> None {
     if (JacRuntime.program is None) {
         raise AttributeError('JacRuntime.program is not initialized');
     }
-    JacRuntime.program.mtir_map[scope] = mtir;
+    import from jaclang.jac0core.mtp { MtirMap }
+    if module_path not in JacRuntime.program.mtir_maps {
+        JacRuntime.program.mtir_maps[module_path] = MtirMap();
+    }
+    JacRuntime.program.mtir_maps[module_path].add(scope, mtir);
 }
 
-"""Get MTIR from the node's MTIR map."""
+"""Get MTIR from the module maps by scope (searches all modules)."""
 impl JacByLLM.get_mtir_from_map(scope: str) -> (Info | None) {
     if (JacRuntime.program is None) {
         raise AttributeError('JacRuntime.program is not initialized');
     }
-    if (scope not in JacRuntime.program.mtir_map) {
-        raise KeyError(f"MTIR not found for scope {scope}");
+    for mtir_map in JacRuntime.program.mtir_maps.values() {
+        info = mtir_map.get(scope);
+        if info is not None {
+            return info;
+        }
     }
-    return JacRuntime.program.mtir_map[scope];
+    raise KeyError(f"MTIR not found for scope {scope}");
+}
+
+"""Get the MtirMap for a specific module."""
+impl JacByLLM.get_mtir_map_for_module(module_path: str) -> (MtirMap | None) {
+    if (JacRuntime.program is None) {
+        raise AttributeError('JacRuntime.program is not initialized');
+    }
+    import from jaclang.jac0core.mtp { MtirMap }
+    return JacRuntime.program.mtir_maps.get(module_path);
 }
 
 """Create a new execution context.

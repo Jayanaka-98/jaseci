@@ -471,5 +471,6 @@ impl MTIRGenPass.enter_ability(nd: uni.Ability) -> None {
         func_info = self._extract_function_info(nd=nd);
     }
     scope = self._get_scope_str(nd);
-    Jac.add_mtir_to_map(scope, func_info);
+    module_path = nd.loc.mod_path;
+    Jac.add_mtir_to_map(module_path, scope, func_info);
 }

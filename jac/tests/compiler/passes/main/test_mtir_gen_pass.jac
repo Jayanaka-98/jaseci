@@ -4,7 +4,7 @@ import os;
 import from pathlib { Path }
 import jaclang;
 import from jaclang { JacRuntime as Jac }
-import from jaclang.jac0core.mtp { ClassInfo, FunctionInfo, MethodInfo }
+import from jaclang.jac0core.mtp { ClassInfo, FunctionInfo, MethodInfo, Info }
 import from jaclang.jac0core.program { JacProgram }
 
 glob FIXTURES = os.path.join(
@@ -16,12 +16,21 @@ glob FIXTURES = os.path.join(
          "fixtures"
      );
 
+"""Get combined MTIR entries from all module maps."""
+def get_all_mtir_entries(prog: JacProgram) -> dict[(str, Info)] {
+    combined: dict[(str, Info)] = {};
+    for mtir_map in prog.mtir_maps.values() {
+        combined.update(mtir_map.entries);
+    }
+    return combined;
+}
+
 test "mtir gen basic" {
     prog = JacProgram();
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had , f"Compilation errors: {prog.errors_had}";
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     assert mtir_map , "MTIR map should not be empty";
     scopes = list(mtir_map.keys());
     assert len(scopes) > 0 , "Should have at least one MTIR entry";
@@ -32,7 +41,7 @@ test "mtir gen standalone function" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     analyze_person_scope = None;
     for scope in mtir_map {
         if "analyze_person" in scope {
@@ -57,7 +66,7 @@ test "mtir gen method" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     summarize_scope = None;
     for scope in mtir_map {
         if "summarize" in scope {
@@ -82,7 +91,7 @@ test "mtir gen complex return type" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     create_team_scope = None;
     for scope in mtir_map {
         if "create_team" in scope {
@@ -106,7 +115,7 @@ test "mtir gen list return type" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     find_people_scope = None;
     for scope in mtir_map {
         if "find_people" in scope {
@@ -128,7 +137,7 @@ test "mtir gen semstrings" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     analyze_person_scope = None;
     for scope in mtir_map {
         if "analyze_person" in scope {
@@ -159,7 +168,7 @@ test "mtir gen class info extraction" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     analyze_person_scope = None;
     for scope in mtir_map {
         if "analyze_person" in scope {
@@ -192,7 +201,7 @@ test "mtir gen all genai abilities captured" {
     prog.compile(os.path.join(FIXTURES, "mtir_gen.jac"));
     assert not prog.errors_had;
     assert Jac.program is not None;
-    mtir_map = Jac.program.mtir_map;
+    mtir_map = get_all_mtir_entries(Jac.program);
     expected_abilities = ["summarize", "analyze_person", "create_team", "find_people"];
     found_abilities: set = set();
     for scope in mtir_map {
@@ -205,4 +214,64 @@ test "mtir gen all genai abilities captured" {
     assert len(found_abilities) == len(expected_abilities) , f"Expected all GenAI abilities to be captured. Found: {found_abilities}, Expected: {set(
         expected_abilities
     )}";
+}
+
+test "mtir module isolation" {
+    import tempfile;
+    import shutil;
+    import from jaclang.jac0core.jir { get_module_cache_path }
+    import from jaclang.jac0core.runtime { JacRuntime }
+
+    def write_jac_file(path: str, semstr: str) -> None {
+        with open(path, "w") as f {
+            f.write(
+                "obj MockLLM { def __call__(**kwargs: dict) -> MockLLM { return self; } }\n"
+            );
+            f.write("glob llm = MockLLM();\n");
+            f.write("obj Item { has val: str; }\n");
+            f.write(f'sem Item.val = """{semstr}""";\n');
+            f.write("def make_item(x: str) -> Item by llm();\n");
+        }
+    }
+
+    def get_field_semstr(info: Info, field_name: str) -> str {
+        for f in info.return_type.fields {
+            if f.name == field_name {
+                return f.semstr;
+            }
+        }
+        return "";
+    }
+
+    temp_dir = tempfile.mkdtemp();
+    try {
+        main_jac = os.path.join(temp_dir, "isolation_test.jac");
+
+        write_jac_file(main_jac, "First version.");
+        prog1 = JacProgram();
+        JacRuntime.program = prog1;
+        prog1.compile(main_jac, type_check=False);
+
+        assert main_jac in prog1.mtir_maps , "Module not found in mtir_maps";
+        info1 = prog1.mtir_maps[main_jac].get("isolation_test.make_item");
+        assert info1 is not None;
+        assert "First" in get_field_semstr(info1, "val");
+
+        write_jac_file(main_jac, "Second version.");
+        cache_path = get_module_cache_path(main_jac);
+        if cache_path.exists() {
+            cache_path.unlink();
+        }
+
+        prog2 = JacProgram();
+        JacRuntime.program = prog2;
+        prog2.compile(main_jac, type_check=False);
+
+        assert main_jac in prog2.mtir_maps , "Module not found after recompile";
+        info2 = prog2.mtir_maps[main_jac].get("isolation_test.make_item");
+        assert info2 is not None;
+        assert "Second" in get_field_semstr(info2, "val") , "Stale MTIR - cache isolation failed";
+    } finally {
+        shutil.rmtree(temp_dir, ignore_errors=True);
+    }
 }

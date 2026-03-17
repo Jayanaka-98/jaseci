@@ -211,9 +211,11 @@ impl JacCompiler.get_bytecode(
             import zlib;
             sections: dict[int, bytes] = {};
             sections[SEC_BYTECODE] = result.gen.py_bytecode;
-            if actual_program.mtir_map {
+            # Only cache MTIR entries that belong to THIS module
+            module_mtir = actual_program.mtir_maps.get(full_target);
+            if module_mtir and len(module_mtir) > 0 {
                 sections[SEC_MTIR] = pickle.dumps(
-                    actual_program.mtir_map, int(pickle.HIGHEST_PROTOCOL)
+                    module_mtir.entries, int(pickle.HIGHEST_PROTOCOL)
                 );
             }
             # Prefer post-optimization bitcode (SEC_NATIVE_OBJ) over
@@ -404,11 +406,14 @@ impl JacCompiler._restore_sections(
     full_target: str, actual_program: JacProgram, secs: dict[int, bytes]
 ) -> None {
     import pickle;
+    import from jaclang.jac0core.mtp { MtirMap }
     mtir_bytes = secs.get(SEC_MTIR);
     if mtir_bytes is not None {
         try {
-            mtir_map = pickle.loads(mtir_bytes);
-            actual_program.mtir_map.update(mtir_map);
+            mtir_entries = pickle.loads(mtir_bytes);
+            # Restore into this module's own MtirMap (not polluting other modules)
+            module_mtir = MtirMap(entries=mtir_entries);
+            actual_program.mtir_maps[full_target] = module_mtir;
         } except Exception {
             ;
         }
