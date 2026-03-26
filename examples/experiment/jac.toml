@@ -1,0 +1,11 @@
+[plugins.byllm.model]
+default_model = "gpt-4o-mini"
+verbose = false
+
+[plugins.byllm.call_params]
+temperature = 0.0    # Deterministic for reproducible experiments
+max_tokens = 4096
+
+[plugins.byllm.litellm]
+local_cost_map = true
+drop_params = true

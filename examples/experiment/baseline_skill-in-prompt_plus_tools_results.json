@@ -1,0 +1,61 @@
+{
+  "label": "BASELINE (skill-in-prompt + tools)",
+  "success": true,
+  "wall_clock_ms": 19736.4,
+  "llm_api_calls": 7,
+  "total_llm_latency_ms": 9136.8,
+  "prompt_tokens": 8520,
+  "completion_tokens": 154,
+  "total_tokens": 8674,
+  "per_api_call": [
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 620,
+      "completion_tokens": 55,
+      "total_tokens": 675,
+      "duration_ms": 2547.9
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1057,
+      "completion_tokens": 12,
+      "total_tokens": 1069,
+      "duration_ms": 932.7
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1259,
+      "completion_tokens": 11,
+      "total_tokens": 1270,
+      "duration_ms": 908.5
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1314,
+      "completion_tokens": 23,
+      "total_tokens": 1337,
+      "duration_ms": 1355.9
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1370,
+      "completion_tokens": 24,
+      "total_tokens": 1394,
+      "duration_ms": 1713.3
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1428,
+      "completion_tokens": 17,
+      "total_tokens": 1445,
+      "duration_ms": 952.0
+    },
+    {
+      "model": "gpt-4o-mini",
+      "prompt_tokens": 1472,
+      "completion_tokens": 12,
+      "total_tokens": 1484,
+      "duration_ms": 726.5
+    }
+  ]
+}

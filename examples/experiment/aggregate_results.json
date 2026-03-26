@@ -1,0 +1,20 @@
+{
+  "baseline": {
+    "success_rate": 1.0,
+    "avg_wall_ms": 140001.63999999998,
+    "avg_prompt": 7698.4,
+    "avg_completion": 141.0,
+    "avg_total": 7839.4,
+    "avg_cost": 0.00123936
+  },
+  "osp": {
+    "success_rate": 1.0,
+    "avg_wall_ms": 27315.02,
+    "avg_prompt": 2496.6,
+    "avg_completion": 1025.0,
+    "avg_total": 3521.6,
+    "avg_cost": 0.0009894899999999998
+  },
+  "baseline_runs": 5,
+  "osp_runs": 5
+}
