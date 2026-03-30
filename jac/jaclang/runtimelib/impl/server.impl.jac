@@ -283,6 +283,16 @@ impl ExecutionManager.spawn_walker(
     ctx.set_user_root(root_id);
     call_token = ctx.call_state.set(CallState());
     call_state = ctx.call_state.get();
+    # Inject per-user LiteLLM virtual key into execution context so byLLM can
+    # consume it without importing jac-scale. Uses getattr for compatibility
+    # with plain ExecutionContext (no user_llm_key field) in non-scale deployments.
+    user_llm_key_cv = getattr(ctx, 'user_llm_key', None);
+    llm_key_token = None;
+    if user_llm_key_cv is not None {
+        user_data = self.user_manager.get_user(username);
+        litellm_key = user_data.get('litellm_key') if user_data else None;
+        llm_key_token = user_llm_key_cv.set(litellm_key);
+    }
     try {
         `walker = walker_cls(**fields);
         if target_node_id {
@@ -316,6 +326,9 @@ impl ExecutionManager.spawn_walker(
         return {'error': str(e), 'traceback': traceback.format_exc()};
     } finally {
         ctx.call_state.reset(call_token);
+        if user_llm_key_cv is not None and llm_key_token is not None {
+            user_llm_key_cv.reset(llm_key_token);
+        }
     }
 }
 

@@ -92,6 +92,16 @@ impl JacAPIServerCore.postinit -> None {
         }
         self.server.app.add_middleware(CustomHeadersMiddleware);
     }
+    # Initialize LiteLLM proxy manager if enabled
+    import from jac_scale.litellm_manager { init_litellm_proxy_manager }
+    self._litellm_manager = init_litellm_proxy_manager();
+    if self._litellm_manager is not None {
+        import from jaclang.cli.console { console }
+        console.print(
+            f"  ✔ LiteLLM proxy ready at {self._litellm_manager.proxy_url}",
+            style="success"
+        );
+    }
     # Initialize Prometheus metrics if enabled
     import from jac_scale.factories.utility_factory { UtilityFactory }
     metrics_config = get_scale_config().get_monitoring_config();
@@ -260,6 +270,20 @@ impl JacAPIServerCore.start(
     # Call the ready callback with the actual port (e.g., to print startup banner)
     if on_ready {
         on_ready(self.port);
+    }
+    # Register lifespan shutdown to stop the LiteLLM proxy subprocess
+    if self._litellm_manager is not None {
+        litellm_mgr = self._litellm_manager;
+        import from contextlib { asynccontextmanager }
+        original_lifespan = self.server.app.router.lifespan_context;
+        @asynccontextmanager
+        async def lifespan_with_litellm(app: Any) {
+            async with original_lifespan(app) {
+                yield;
+            }
+            litellm_mgr.stop();
+        }
+        self.server.app.router.lifespan_context = lifespan_with_litellm;
     }
     self.server.run_server(port=self.port);
 }

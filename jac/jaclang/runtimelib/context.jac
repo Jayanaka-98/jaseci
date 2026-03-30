@@ -36,7 +36,8 @@ obj ExecutionContext {
         system_root: NodeAnchor by postinit,
         user_root: NodeAnchor by postinit,
         entry_node: NodeAnchor by postinit,
-        call_state: ContextVar[CallState] = ContextVar('call_state');
+        call_state: ContextVar[CallState] = ContextVar('call_state'),
+        user_llm_key: ContextVar = ContextVar('user_llm_key', default=None);
 
     def postinit -> None;
     def _get_anchor(anchor_id: str) -> NodeAnchor;

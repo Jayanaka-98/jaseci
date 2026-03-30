@@ -69,6 +69,22 @@ impl JacScaleConfig.get_default_config(self: JacScaleConfig) -> dict[str, Any] {
         },
         'secrets': {},
         'server': {'port': 8000, 'host': '0.0.0.0'},
+        'litellm': {
+            'enabled': False,
+            'port': 4000,
+            'master_key': '',
+            'proxy_url': '',
+            'health_check_retries': 10,
+            'health_check_interval': 2,
+            'models': [],
+            'defaults': {
+                'max_budget': None,
+                'budget_duration': '30d',
+                'tpm_limit': None,
+                'rpm_limit': None,
+                'models': []
+            }
+        },
         'webhook': {
             'secret': 'webhook-secret-key',
             'signature_header': 'X-Webhook-Signature',
@@ -317,6 +333,49 @@ impl JacScaleConfig.get_scheduler_config(self: JacScaleConfig) -> dict[str, Any]
         'system_user_password': os.environ.get('SYSTEM_USER_PASSWORD')
         or scheduler_config.get('system_user_password', 'system_secret'),
         'collection': scheduler_config.get('collection', 'scheduled_jobs')
+    };
+}
+
+"""Get LiteLLM proxy configuration from jac.toml.
+
+The 'models' list follows litellm's model_list schema. Each entry has:
+  model_name: str             - alias used in API calls
+  litellm_params: dict        - passed directly to litellm (model, api_key, ...)
+
+api_key values using ${VAR} syntax are intentionally NOT resolved here —
+they are converted to os.environ/VAR when generating the litellm config.yaml
+so that the subprocess reads them directly from the environment.
+
+'proxy_url' is auto-set to http://localhost:<port> in local mode.
+In K8s mode (KUBERNETES_SERVICE_HOST set) it must be provided explicitly.
+"""
+impl JacScaleConfig.get_litellm_config(self: JacScaleConfig) -> dict[str, Any] {
+    config = self.load();
+    ll = config.get('litellm', {});
+    defaults = ll.get('defaults', {});
+    port = int(ll.get('port', 4000));
+    # auto-derive local proxy_url if not explicitly set
+    proxy_url = (
+        os.environ.get('LITELLM_PROXY_URL')
+        or ll.get('proxy_url', '')
+        or f"http://localhost:{port}"
+    );
+    master_key = os.environ.get('LITELLM_MASTER_KEY') or ll.get('master_key', '');
+    return {
+        'enabled': bool(ll.get('enabled', False)),
+        'port': port,
+        'master_key': master_key,
+        'proxy_url': proxy_url,
+        'health_check_retries': int(ll.get('health_check_retries', 10)),
+        'health_check_interval': int(ll.get('health_check_interval', 2)),
+        'models': ll.get('models', []),
+        'defaults': {
+            'max_budget': defaults.get('max_budget', None),
+            'budget_duration': defaults.get('budget_duration', '30d'),
+            'tpm_limit': defaults.get('tpm_limit', None),
+            'rpm_limit': defaults.get('rpm_limit', None),
+            'models': defaults.get('models', [])
+        }
     };
 }
 

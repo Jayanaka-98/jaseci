@@ -22,7 +22,8 @@ import from byllm.exceptions {
     OutputConversionError,
     RateLimitError,
     ModelNotFoundError,
-    UnknownToolError
+    UnknownToolError,
+    LiteLLMAccessError
 }
 import from byllm.types {
     CompletionResult,

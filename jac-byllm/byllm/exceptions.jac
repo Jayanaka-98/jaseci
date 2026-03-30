@@ -43,3 +43,13 @@ obj FinishToolError(ByLLMError) {}
 
 """Raised for invalid byLLM usage such as unsupported type annotations or mismatched stream settings."""
 obj ConfigurationError(ByLLMError) {}
+
+"""Raised when the LiteLLM proxy rejects a call at runtime.
+
+Maps HTTP error codes from the proxy to human-readable messages:
+  401 → key invalid or revoked
+  402 → user budget exceeded
+  404 → model not found in proxy config
+  429 → rate or token limit exceeded
+"""
+obj LiteLLMAccessError(ByLLMError) {}
