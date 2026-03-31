@@ -1,13 +1,15 @@
 """Admin dashboard layout with navigation and content routing."""
 
 cl {
+    import from react { useEffect }
     import from ...components.layout.Header { Header }
     import from ...components.layout.CategoryTabs { CategoryTabs }
     import from ...components.layout.SubTabs { SubTabs }
     import from ...components.common.Alert { Alert }
     import from ...context.AuthContext { useAuth }
     import from ...context.AlertContext { useAlert }
-    import from ...constants.categories { categories, subTabs }
+    import from ...constants.categories { categories, subTabs, llmCategory, llmSubTabs }
+    import from ...services.featuresService { getFeatures }
 
     # Import pages
     import from .users.UsersPage { UsersPage }
@@ -15,6 +17,12 @@ cl {
     import from .monitoring.MetricsPage { MetricsPage }
     import from .monitoring.LLMMetricsPage { LLMMetricsPage }
     import from .monitoring.LLMTracesPage { LLMTracesPage }
+    import from .llm.LLMProxyPage {
+        LLMKeysPage,
+        LLMUsersPage,
+        LLMSpendPage,
+        LLMProvidersPage
+    }
     import from .placeholder.PlaceholderPage {
         SessionsPage,
         ApiKeysPage,
@@ -83,17 +91,42 @@ cl {
                  "scaling": ScalingPage,
                  "pods": PodsPage
              },
-             "audit": {"activity": ActivityPage, "security": SecurityPage}
+             "audit": {"activity": ActivityPage, "security": SecurityPage},
+             "llm": {
+                 "keys": LLMKeysPage,
+                 "users": LLMUsersPage,
+                 "spend": LLMSpendPage,
+                 "providers": LLMProvidersPage
+             }
          };
 
     def:pub DashboardLayout -> JsxElement {
         has activeCategory: str = "auth",
-            activeSubTab: str = "users";
+            activeSubTab: str = "users",
+            features: dict = {};
 
         auth = useAuth();
         alert = useAlert();
 
-        currentSubTabs = subTabs[activeCategory];
+        async def loadFeatures -> None {
+            result = await getFeatures(auth["authToken"]);
+            if result and not result["error"] {
+                features = result;
+            }
+        }
+
+        useEffect(lambda -> None { loadFeatures();}, []);
+
+        # Build visible categories — add LLM Proxy only when proxy is active
+        visibleCategories = (
+            categories.concat([llmCategory]) if features["litellm"] else categories
+        );
+
+        # Resolve current subtabs — use llmSubTabs for the "llm" category
+        currentSubTabs = (
+            llmSubTabs if activeCategory == "llm"
+            else (subTabs[activeCategory] or [])
+        );
 
         def handleCategoryChange(catId: str, defaultTab: str) -> None {
             activeCategory = catId;
@@ -127,7 +160,7 @@ cl {
                         onLogout={auth["logout"]}
                     />
                     <CategoryTabs
-                        categories={categories}
+                        categories={visibleCategories}
                         activeCategory={activeCategory}
                         onCategoryChange={handleCategoryChange}
                     />

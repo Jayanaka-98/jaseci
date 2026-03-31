@@ -83,8 +83,21 @@ def _resolve_proxy_params -> tuple[str | None, str | None] {
         ctx = JacRuntime.get_context();
         user_llm_key_cv = getattr(ctx, 'user_llm_key', None);
         user_key = user_llm_key_cv.get() if user_llm_key_cv is not None else None;
-    } except Exception {
+    } except Exception as _ctx_err {
         user_key = None;
+        import logging as _log;
+        _log.getLogger("byllm").warning(f"[byLLM] Failed to read user_llm_key from context: {_ctx_err}");
+    }
+    import logging as _log;
+    if user_key is not None {
+        _log.getLogger("byllm").debug(
+            f"[byLLM] proxy_url={proxy_url!r} user_key={user_key[:10]}... (key present)"
+        );
+    } else {
+        _log.getLogger("byllm").warning(
+            f"[byLLM] proxy_url={proxy_url!r} user_key=None — "
+            "ContextVar not set or key not provisioned for this user"
+        );
     }
     if user_key is None {
         raise LiteLLMAccessError(

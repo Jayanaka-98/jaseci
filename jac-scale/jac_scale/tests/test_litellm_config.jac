@@ -337,21 +337,42 @@ test "byllm default_model not duplicated if already in list" {
 # Startup validation
 # ─────────────────────────────────────────────────────────────────────────────
 
-test "missing master_key raises LiteLLMConfigError at start" {
-    mgr = make_manager({
-        'enabled': True,
-        'master_key': '',
-        'models': [],
-        'defaults': {},
-        'port': 4000,
-        'proxy_url': 'http://localhost:4000',
-        'health_check_retries': 1,
-        'health_check_interval': 0
-    });
-    with pytest.raises(LiteLLMConfigError) as exc_info {
-        mgr.start();
+test "missing master_key auto-generates and stores a key at start" {
+    import tempfile;
+    import shutil;
+    import from unittest.mock { patch }
+    tmp = tempfile.mkdtemp();
+    try {
+        generated = [];
+        original_load = None;
+
+        def fake_load_or_generate(self: Any) -> str {
+            key = 'sk-jac-autokey';
+            generated.append(key);
+            return key;
+        }
+
+        mgr = make_manager({
+            'enabled': True,
+            'master_key': '',
+            'models': [],
+            'defaults': {},
+            'port': 4000,
+            'proxy_url': 'http://localhost:4000',
+            'health_check_retries': 1,
+            'health_check_interval': 0
+        });
+        with patch.object(mgr, '_load_or_generate_master_key', return_value='sk-jac-autokey') {
+            with patch.object(mgr, '_resolve_models', return_value=[]) {
+                try {
+                    mgr.start();
+                } except Exception { }
+            }
+        }
+        assert mgr.config.get('master_key') == 'sk-jac-autokey';
+    } finally {
+        shutil.rmtree(tmp, ignore_errors=True);
     }
-    assert 'master_key' in str(exc_info.value).lower();
 }
 
 test "k8s mode with no proxy_url raises LiteLLMConfigError" {

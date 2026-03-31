@@ -78,6 +78,7 @@ obj UserManager {
         username: str, current_password: str, new_password: str
     ) -> dict[str, str];
 
+    def set_litellm_key(username: str, key: str) -> None;
     def close -> None;
 }
 

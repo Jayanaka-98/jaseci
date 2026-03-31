@@ -183,6 +183,8 @@ obj JacAPIServerStatic {
     def register_root_asset_endpoint -> None;
     # Graph visualization
     def register_graph_endpoint -> None;
+    # LiteLLM admin proxy (only registered when proxy is active)
+    def register_llm_proxy_endpoint -> None;
     def serve_graph_page -> HTMLResponse;
     def graph_data(Authorization: (str | None) = None) -> JSONResponse;
 }

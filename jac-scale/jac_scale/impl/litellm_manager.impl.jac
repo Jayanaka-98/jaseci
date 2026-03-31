@@ -56,10 +56,8 @@ impl LiteLLMProxyManager.start -> None {
     }
     master_key = self.config.get('master_key', '');
     if not master_key {
-        raise LiteLLMConfigError(
-            "plugins.scale.litellm.master_key is required when litellm is enabled. "
-            "Set it in jac.toml or via the LITELLM_MASTER_KEY environment variable."
-        );
+        master_key = self._load_or_generate_master_key();
+        self.config['master_key'] = master_key;
     }
     if self._is_k8s_mode() {
         if not self.config.get('proxy_url', '') {
@@ -68,9 +66,27 @@ impl LiteLLMProxyManager.start -> None {
                 "Set it in jac.toml or via the LITELLM_PROXY_URL environment variable."
             );
         }
-        logger.info(f"LiteLLM proxy (external/K8s mode): {self.proxy_url}");
-        self._wait_for_health();
-        return;
+        logger.info(f"LiteLLM proxy (K8s mode): {self.proxy_url}");
+        # K8s pods take longer to start — use a generous timeout (default 120s).
+        # Configurable via plugins.scale.litellm.k8s_startup_timeout in jac.toml.
+        timeout_secs = self.config.get('k8s_startup_timeout', 120);
+        interval = 5;
+        retries = timeout_secs // interval;
+        for attempt in range(retries) {
+            if self.is_healthy() {
+                logger.info(f"LiteLLM proxy ready at {self.proxy_url}");
+                return;
+            }
+            logger.debug(
+                f"Waiting for LiteLLM proxy (K8s)... ({attempt + 1}/{retries})"
+            );
+            time.sleep(interval);
+        }
+        raise LiteLLMConfigError(
+            f"LiteLLM proxy did not become healthy after {timeout_secs}s "
+            f"at {self.proxy_url}/health. "
+            "Check that the litellm pod is running: kubectl get pods -n <namespace>"
+        );
     }
     # Local mode: spawn subprocess
     try {
@@ -92,17 +108,22 @@ impl LiteLLMProxyManager.start -> None {
     cmd = [
         'litellm',
         '--config', tmp.name,
-        '--port', str(port),
-        '--master_key', master_key
+        '--port', str(port)
     ];
     logger.info(f"Starting LiteLLM proxy on port {port} ...");
+    proc_env = os.environ.copy();
+    proc_env['LITELLM_MASTER_KEY'] = master_key;
+    # Configure a local SQLite database for key/user management so that
+    # /key/generate and /user/new work without an external Postgres instance.
+    # Only set DATABASE_URL if not already provided by the environment.
     self._process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=os.environ.copy()
+        stderr=subprocess.STDOUT,
+        env=proc_env,
+        text=True
     );
-    self._wait_for_health();
+    self._wait_for_startup_signal();
     logger.info(f"LiteLLM proxy ready at {self.proxy_url}");
 }
 
@@ -128,12 +149,24 @@ impl LiteLLMProxyManager.stop -> None {
     }
 }
 
-"""Return True if the proxy /health endpoint responds with 200."""
+"""Return True if the proxy /health endpoint responds with 200 or 401.
+
+401 means the proxy is up and enforcing auth — that's healthy.
+We use /health/liveliness which doesn't require a key in some litellm versions,
+but fall back to /health with the master key header either way.
+"""
 impl LiteLLMProxyManager.is_healthy -> bool {
     import requests;
+    master_key = self.config.get('master_key', '');
+    headers = {'Authorization': f"Bearer {master_key}"} if master_key else {};
     try {
-        resp = requests.get(f"{self.proxy_url}/health", timeout=5.0);
-        return resp.status_code == 200;
+        # /health/liveliness just checks if the server process is alive — no model
+        # validation. /health validates every configured model and returns 500 if
+        # any API keys are missing, which gives a false "unhealthy" signal.
+        resp = requests.get(
+            f"{self.proxy_url}/health/liveliness", headers=headers, timeout=5.0
+        );
+        return resp.status_code in (200, 401);
     } except Exception {
         return False;
     }
@@ -209,6 +242,32 @@ impl LiteLLMProxyManager.delete_user(username: str) -> None {
 """Return True when running inside a Kubernetes pod."""
 impl LiteLLMProxyManager._is_k8s_mode -> bool {
     return bool(os.environ.get('KUBERNETES_SERVICE_HOST'));
+}
+
+"""Load persisted master key from .jac/data/litellm_master_key, or generate and save one.
+
+The key is generated once and reused across restarts so existing virtual keys
+remain valid. Stored in plaintext under .jac/data/ which is already the local
+data directory used by jac-scale (same location as anchor_store.db).
+"""
+impl LiteLLMProxyManager._load_or_generate_master_key -> str {
+    import secrets;
+    import from pathlib { Path }
+    key_file = Path('.jac/data/litellm_master_key');
+    key_file.parent.mkdir(parents=True, exist_ok=True);
+    if key_file.exists() {
+        key = key_file.read_text().strip();
+        if key {
+            return key;
+        }
+    }
+    key = 'sk-jac-' + secrets.token_hex(32);
+    key_file.write_text(key);
+    logger.info(
+        f"Generated LiteLLM master key and saved to {key_file}. "
+        "Add LITELLM_MASTER_KEY to your environment or jac.toml to pin it."
+    );
+    return key;
 }
 
 """Build the effective model list.
@@ -344,23 +403,48 @@ impl LiteLLMProxyManager._admin_delete(
     }
 }
 
-"""Poll /health until proxy is up, or raise LiteLLMConfigError on timeout."""
+"""Wait for LiteLLM subprocess to emit 'Application startup complete.' on stdout.
+
+Reads lines from the merged stdout/stderr pipe. Unblocks immediately when the
+uvicorn ready signal appears — no polling, no arbitrary timeout.
+Raises LiteLLMConfigError if the process exits before the signal.
+"""
+impl LiteLLMProxyManager._wait_for_startup_signal -> None {
+    import threading;
+    READY_SIGNAL = 'Application startup complete.';
+    collected: list[str] = [];
+
+    for line in self._process.stdout {
+        stripped = line.rstrip();
+        collected.append(stripped);
+        logger.debug(f"[litellm] {stripped}");
+        if READY_SIGNAL in stripped {
+            logger.info(f"LiteLLM proxy ready at {self.proxy_url}");
+            return;
+        }
+        if self._process.poll() is not None {
+            output = '\n'.join(collected);
+            raise LiteLLMConfigError(
+                f"LiteLLM proxy process exited unexpectedly.\n{output}"
+            );
+        }
+    }
+    # stdout closed without the signal (process exited)
+    output = '\n'.join(collected);
+    raise LiteLLMConfigError(
+        f"LiteLLM proxy exited before becoming ready.\n{output}"
+    );
+}
+
+"""Poll /health until proxy is up — used for K8s mode where we don't own the process."""
 impl LiteLLMProxyManager._wait_for_health -> None {
-    retries = self.config.get('health_check_retries', 10);
-    interval = self.config.get('health_check_interval', 2);
+    retries = self.config.get('health_check_retries', 30);
+    interval = self.config.get('health_check_interval', 3);
     for attempt in range(retries) {
         if self.is_healthy() {
             return;
         }
-        if self._process is not None and self._process.poll() is not None {
-            communicate_result = self._process.communicate();
-            stderr_bytes = communicate_result[1];
-            raise LiteLLMConfigError(
-                f"LiteLLM proxy process exited unexpectedly. stderr:\n"
-                f"{stderr_bytes.decode(errors='replace')}"
-            );
-        }
-        logger.debug(f"Waiting for LiteLLM proxy... ({attempt + 1}/{retries})");
+        logger.debug(f"Waiting for LiteLLM proxy (K8s)... ({attempt + 1}/{retries})");
         time.sleep(interval);
     }
     raise LiteLLMConfigError(

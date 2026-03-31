@@ -101,6 +101,63 @@ impl JacAPIServerCore.postinit -> None {
             f"  ✔ LiteLLM proxy ready at {self._litellm_manager.proxy_url}",
             style="success"
         );
+        # Wire byLLM to route all `by llm()` calls through the LiteLLM proxy.
+        # Only set if the user hasn't already explicitly configured a base_url.
+        try {
+            import from byllm.llm { _model_config }
+            if not _model_config.get("base_url") and not _model_config.get("proxy_base_url") {
+                _model_config["base_url"] = self._litellm_manager.proxy_url;
+                console.print(
+                    f"  ✔ byLLM routed through LiteLLM proxy at {self._litellm_manager.proxy_url}",
+                    style="success"
+                );
+            }
+        } except ImportError {
+            # byLLM not installed, nothing to configure
+        }
+        # Re-provision all existing users into LiteLLM on every startup.
+        # LiteLLM's default in-memory store resets on restart, so stored keys
+        # become stale. Generating fresh keys here keeps jac-scale and LiteLLM in sync.
+        litellm_mgr_ref = self._litellm_manager;
+        try {
+            list_fn = getattr(self.user_manager, 'list_all_users', None);
+            set_key_fn = getattr(self.user_manager, 'set_litellm_key', None);
+            logger.info(
+                f"LiteLLM re-provision: user_manager={type(self.user_manager).__name__} "
+                f"list_fn={list_fn is not None} set_key_fn={set_key_fn is not None}"
+            );
+            if list_fn and set_key_fn {
+                all_users = list_fn(limit=10000);
+                logger.info(f"LiteLLM re-provision: found {len(all_users)} user(s)");
+                reprovisioned = 0;
+                for u in all_users {
+                    uname = u.get('username', '');
+                    if not uname {
+                        continue;
+                    }
+                    try {
+                        try {
+                            litellm_mgr_ref.create_user(uname, limits={});
+                        } except Exception {
+                            # User may already exist in proxy; continue to key generation
+                        }
+                        new_key = litellm_mgr_ref.generate_key(uname, limits={});
+                        set_key_fn(uname, new_key);
+                        reprovisioned += 1;
+                    } except Exception as ue {
+                        logger.warning(f"Could not re-provision LiteLLM key for '{uname}': {ue}");
+                    }
+                }
+                if reprovisioned > 0 {
+                    console.print(
+                        f"  ✔ Re-provisioned LiteLLM keys for {reprovisioned} user(s)",
+                        style="success"
+                    );
+                }
+            }
+        } except Exception as e {
+            logger.warning(f"LiteLLM user re-provisioning failed: {e}");
+        }
     }
     # Initialize Prometheus metrics if enabled
     import from jac_scale.factories.utility_factory { UtilityFactory }
@@ -233,6 +290,9 @@ impl JacAPIServerCore.start(
     self.register_graph_endpoint();
     self.register_admin_endpoints();
     self.register_llm_telemetry_endpoints();
+    if self._litellm_manager is not None {
+        self.register_llm_proxy_endpoint();
+    }
     # Use dynamic routing for HMR support, static routing for production
     if dev {
         # Enable FastAPI docs only in dev mode
@@ -1197,4 +1257,66 @@ impl JacAPIServerCore._create_admin_metrics_handler(
         return original_handler();
     }
     return admin_metrics_handler;
+}
+
+"""Register a catch-all reverse-proxy route at /admin/llm/{path} that forwards
+requests to the LiteLLM proxy UI, gated behind admin JWT authentication.
+
+httpx is imported inline (not at module level) to avoid the Jac type-checker crash.
+The master key is injected so admins never need to know it; LiteLLM sees a valid
+admin-authenticated request. Only called when _litellm_manager is not None.
+"""
+impl JacAPIServerStatic.register_llm_proxy_endpoint -> None {
+    import from fastapi { Request }
+    import from fastapi.responses { Response }
+    import httpx;
+
+    litellm_url = self._litellm_manager.proxy_url;
+    master_key = self._litellm_manager.config.get('master_key', '');
+    user_manager = self.user_manager;
+
+    async def llm_proxy_handler(request: Request) -> Response {
+        # Validate admin JWT before forwarding anything
+        auth_header = request.headers.get('Authorization', '');
+        token = auth_header.removeprefix('Bearer ').strip() if auth_header else '';
+        username = user_manager.validate_jwt_token(token) if token else None;
+        if not username or not user_manager.is_admin(username) {
+            return Response(content='Forbidden', status_code=403, media_type='text/plain');
+        }
+        # Build forwarded request — strip host, inject master key
+        path = request.path_params.get('path', '');
+        target_url = f"{litellm_url}/{path}";
+        fwd_headers = {k: v for (k, v) in request.headers.items() if k.lower() != 'host'};
+        fwd_headers['authorization'] = f"Bearer {master_key}";
+        body = await request.body();
+        try {
+            async with httpx.AsyncClient(follow_redirects=True) as client {
+                resp = await client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=fwd_headers,
+                    content=body,
+                    params=dict(request.query_params),
+                    timeout=30.0
+                );
+            }
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=dict(resp.headers),
+                media_type=resp.headers.get('content-type')
+            );
+        } except httpx.ConnectError {
+            return Response(
+                content='LiteLLM proxy unreachable', status_code=502, media_type='text/plain'
+            );
+        }
+    }
+
+    self.server.app.add_route(
+        '/admin/llm/{path:path}',
+        llm_proxy_handler,
+        methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH']
+    );
+    logger.info("LiteLLM admin proxy mounted at /admin/llm/");
 }

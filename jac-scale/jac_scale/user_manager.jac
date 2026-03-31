@@ -81,6 +81,7 @@ obj JacScaleUserManager(UserManager) {
     def set_password_required(username: str, required: bool) -> dict[str, str];
     def bootstrap_admin_user -> dict[str, str];
     def list_all_users(limit: int = 100, offset: int = 0) -> list[dict[str, Any]];
+    def set_litellm_key(username: str, key: str) -> None;
     def delete_user(username: str) -> dict[str, str];
     def create_user_as_admin(
         username: str,

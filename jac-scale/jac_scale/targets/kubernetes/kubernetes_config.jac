@@ -68,7 +68,11 @@ obj KubernetesConfig(BaseConfig) {
         ingress_session_affinity: bool = True,
         # Domain / TLS configuration
         domain: str = "",
-        cert_manager_email: str = "";
+        cert_manager_email: str = "",
+        # LiteLLM proxy
+        litellm_enabled: bool = False,
+        litellm_image: str = 'ghcr.io/berriai/litellm:main-latest',
+        litellm_port: int = 4000;
 
     override def to_dict -> dict[str, Any] {
         base = super.to_dict();
@@ -136,7 +140,11 @@ obj KubernetesConfig(BaseConfig) {
                 'ingress_session_affinity': self.ingress_session_affinity,
                 # Domain / TLS configuration
                 'domain': self.domain,
-                'cert_manager_email': self.cert_manager_email
+                'cert_manager_email': self.cert_manager_email,
+                # LiteLLM proxy
+                'litellm_enabled': self.litellm_enabled,
+                'litellm_image': self.litellm_image,
+                'litellm_port': self.litellm_port
             }
         );
         return base;
@@ -205,7 +213,12 @@ obj KubernetesConfig(BaseConfig) {
             ingress_limit_connections=config.get('ingress_limit_connections', 20),
             ingress_session_affinity=config.get('ingress_session_affinity', True),
             domain=config.get('domain', ''),
-            cert_manager_email=config.get('cert_manager_email', '')
+            cert_manager_email=config.get('cert_manager_email', ''),
+            litellm_enabled=config.get('litellm_enabled', False),
+            litellm_image=config.get(
+                'litellm_image', 'ghcr.io/berriai/litellm:main-latest'
+            ),
+            litellm_port=config.get('litellm_port', 4000)
         );
     }
 }

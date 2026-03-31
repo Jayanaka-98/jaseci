@@ -43,4 +43,10 @@ cl {
     async def:pub del(endpoint: str, token: str = "") -> dict {
         return await fetchApi(endpoint, {"method": "DELETE"}, token);
     }
+
+    async def:pub delBody(endpoint: str, body: dict, token: str = "") -> dict {
+        return await fetchApi(
+            endpoint, {"method": "DELETE", "body": JSON.stringify(body)}, token
+        );
+    }
 }

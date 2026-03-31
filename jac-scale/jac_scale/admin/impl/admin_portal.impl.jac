@@ -433,6 +433,125 @@ impl JacAPIServerAdmin.register_admin_endpoints -> None {
             description='Get parsed Prometheus metrics as JSON (admin only)'
         )
     );
+    # Health status endpoint
+    _litellm_mgr = self._litellm_manager;
+    async def health_handler(request: Request) -> JSONResponse {
+        authorization = request.headers.get('Authorization');
+        if not self.validate_admin_token(authorization) {
+            return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+        }
+        # API server is always healthy if we're handling requests
+        health = {
+            'api_server': {'status': 'ok'},
+            'database': {'status': 'unknown'},
+            'litellm': {'status': 'not_configured', 'url': None}
+        };
+        # Database check — attempt a lightweight user_manager call
+        try {
+            self.user_manager.user_exists('__health_check_probe__');
+            health['database'] = {'status': 'connected'};
+        } except Exception {
+            health['database'] = {'status': 'error'};
+        }
+        # LiteLLM proxy check
+        if _litellm_mgr is not None {
+            try {
+                is_up = _litellm_mgr.is_healthy();
+                health['litellm'] = {
+                    'status': 'healthy' if is_up else 'unhealthy',
+                    'url': _litellm_mgr.proxy_url
+                };
+            } except Exception {
+                health['litellm'] = {
+                    'status': 'error',
+                    'url': _litellm_mgr.proxy_url
+                };
+            }
+        }
+        return JSONResponse(health);
+    }
+    self.server.add_endpoint(
+        JEndPoint(
+            method=HTTPMethod.GET,
+            path='/admin/health',
+            callback=health_handler,
+            parameters=[],
+            response_model=None,
+            tags=['Admin'],
+            summary='Health status',
+            description='Live status of API server, database, and LiteLLM proxy'
+        )
+    );
+    # LiteLLM UI auto-login — returns an HTML page that auto-submits a form to
+    # LiteLLM's /login endpoint. Form posts are not subject to CORS, so the browser
+    # sends credentials directly to localhost:4000, which sets its own token cookie
+    # and redirects to /ui/. Auth is via ?t=<admin-jwt> query param (GET navigation).
+    _litellm_mgr_ref = self._litellm_manager;
+    async def llm_ui_handler(request: Request) -> Response {
+        import html as html_mod;
+        token_param = request.query_params.get('t', '');
+        if not token_param {
+            return Response(content='Missing token', status_code=401, media_type='text/plain');
+        }
+        username = self.user_manager.validate_jwt_token(token_param);
+        if not username or not self.user_manager.is_admin(username) {
+            return Response(content='Unauthorized', status_code=403, media_type='text/plain');
+        }
+        if _litellm_mgr_ref is None {
+            return Response(content='LiteLLM not configured', status_code=404, media_type='text/plain');
+        }
+        proxy_url = _litellm_mgr_ref.proxy_url;
+        master_key = _litellm_mgr_ref.config.get('master_key', '');
+        # Generate the LiteLLM UI JWT directly — same structure as LiteLLM's /login.
+        # This avoids calling /login over the network and bypasses credential issues.
+        import jwt as pyjwt;
+        import time;
+        payload = {
+            'user_id': 'default_user_id',
+            'key': master_key,
+            'user_email': None,
+            'user_role': 'proxy_admin',
+            'login_method': 'username_password',
+            'premium_user': False,
+            'auth_header_name': 'Authorization',
+            'disabled_non_admin_personal_key_creation': False,
+            'server_root_path': ''
+        };
+        import json;
+        ui_jwt = pyjwt.encode(payload, master_key, algorithm='HS256');
+        if not isinstance(ui_jwt, str) {
+            ui_jwt = ui_jwt.decode();
+        }
+        # Embed values as JSON strings so escaping is handled correctly
+        js_token = json.dumps(ui_jwt);
+        js_url = json.dumps(f"{proxy_url}/ui/?login=success");
+        body = f"""<!DOCTYPE html>
+<html>
+<head><title>Opening LiteLLM UI...</title></head>
+<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f172a;color:#94a3b8;">
+  <p>Logging in to LiteLLM...</p>
+  <script>
+    var token = {js_token};
+    var url = {js_url};
+    document.cookie = "token=" + token + "; path=/; SameSite=Lax";
+    window.location.href = url;
+  </script>
+</body>
+</html>""";
+        return Response(content=body, media_type='text/html');
+    }
+    self.server.add_endpoint(
+        JEndPoint(
+            method=HTTPMethod.GET,
+            path='/admin/llm-ui',
+            callback=llm_ui_handler,
+            parameters=[],
+            response_model=None,
+            tags=['Admin'],
+            summary='LiteLLM UI auto-login',
+            description='Auto-login page for LiteLLM UI (admin only)'
+        )
+    );
     # Admin UI - redirect /admin to /admin/
     self.server.add_endpoint(
         JEndPoint(
@@ -484,6 +603,176 @@ impl JacAPIServerAdmin.register_admin_endpoints -> None {
             description='Serve admin portal static assets'
         )
     );
+    # Feature flags endpoint — tells the UI which optional features are active
+    async def features_handler(request: Request) -> JSONResponse {
+        if not self.validate_admin_token(request.headers.get('Authorization')) {
+            return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+        }
+        return JSONResponse({'litellm': self._litellm_manager is not None});
+    }
+    self.server.add_endpoint(
+        JEndPoint(
+            method=HTTPMethod.GET,
+            path='/admin/features',
+            callback=features_handler,
+            parameters=[],
+            response_model=None,
+            tags=['Admin'],
+            summary='Feature flags',
+            description='Which optional features (litellm, etc.) are currently active'
+        )
+    );
+    # LLM proxy management endpoints — only registered when LiteLLM proxy is running
+    if self._litellm_manager is not None {
+        _lmgr = self._litellm_manager;
+
+        def _llm_req(method: str, path: str, body: dict | None = None) -> dict {
+            import requests as _r;
+            master_key = _lmgr.config.get('master_key', '');
+            headers = {
+                'Authorization': f"Bearer {master_key}",
+                'Content-Type': 'application/json'
+            };
+            url = f"{_lmgr.proxy_url}{path}";
+            try {
+                if method == 'GET' {
+                    resp = _r.get(url, headers=headers, timeout=10.0);
+                } elif method == 'POST' {
+                    resp = _r.post(url, json=body, headers=headers, timeout=10.0);
+                } else {
+                    resp = _r.delete(url, json=body, headers=headers, timeout=10.0);
+                }
+                if resp.ok {
+                    return {'ok': True, 'data': resp.json()};
+                }
+                return {'ok': False, 'error': {'message': resp.text, 'status': resp.status_code}};
+            } except Exception as e {
+                return {'ok': False, 'error': {'message': str(e)}};
+            }
+        }
+
+        # GET /admin/llm/proxy/keys — list all virtual keys
+        async def llm_keys_list_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            return JSONResponse(_llm_req('GET', '/key/list'));
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.GET, path='/admin/llm/proxy/keys',
+            callback=llm_keys_list_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='List LiteLLM virtual keys'
+        ));
+
+        # POST /admin/llm/proxy/keys — generate a new virtual key
+        async def llm_keys_create_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            body = await request.json();
+            return JSONResponse(_llm_req('POST', '/key/generate', body));
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.POST, path='/admin/llm/proxy/keys',
+            callback=llm_keys_create_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='Generate LiteLLM virtual key'
+        ));
+
+        # DELETE /admin/llm/proxy/keys — revoke a virtual key (body: {"key": "sk-..."})
+        async def llm_keys_revoke_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            body = await request.json();
+            key = body.get('key', '');
+            return JSONResponse(_llm_req('DELETE', '/key/delete', {'keys': [key]}));
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.DELETE, path='/admin/llm/proxy/keys',
+            callback=llm_keys_revoke_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='Revoke LiteLLM virtual key'
+        ));
+
+        # GET /admin/llm/proxy/users — list users with budget/spend/limits
+        async def llm_users_list_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            return JSONResponse(_llm_req('GET', '/user/list'));
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.GET, path='/admin/llm/proxy/users',
+            callback=llm_users_list_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='List LiteLLM users'
+        ));
+
+        # POST /admin/llm/proxy/users — update a user's budget/rate limits
+        # body: {user_id, max_budget?, budget_duration?, rpm_limit?, tpm_limit?}
+        async def llm_user_update_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            body = await request.json();
+            return JSONResponse(_llm_req('POST', '/user/update', body));
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.POST, path='/admin/llm/proxy/users',
+            callback=llm_user_update_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='Update LiteLLM user limits'
+        ));
+
+        # GET /admin/llm/proxy/spend — per-user spend from /user/list, per-key from /key/list
+        async def llm_spend_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            users_r = _llm_req('GET', '/user/list');
+            keys_r = _llm_req('GET', '/key/list');
+            users_data = (users_r['data'] if users_r['ok'] else {});
+            keys_data = (keys_r['data'] if keys_r['ok'] else {});
+            return JSONResponse({
+                'ok': True,
+                'data': {
+                    'users': users_data,
+                    'keys': keys_data
+                }
+            });
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.GET, path='/admin/llm/proxy/spend',
+            callback=llm_spend_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='LiteLLM spend overview'
+        ));
+
+        # POST /admin/llm/proxy/providers — set a provider API key env var (not persisted)
+        # body: {provider: "OPENAI_API_KEY", value: "sk-..."}
+        async def llm_providers_handler(request: Request) -> JSONResponse {
+            if not self.validate_admin_token(request.headers.get('Authorization')) {
+                return JSONResponse({'error': 'Unauthorized'}, status_code=403);
+            }
+            import os;
+            body = await request.json();
+            provider = body.get('provider', '');
+            value = body.get('value', '');
+            allowed = {
+                'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'GEMINI_API_KEY',
+                'GROQ_API_KEY', 'AZURE_API_KEY', 'COHERE_API_KEY'
+            };
+            if provider not in allowed {
+                return JSONResponse(
+                    {'ok': False, 'error': {'message': f"Unknown provider key: {provider}"}},
+                    status_code=400
+                );
+            }
+            os.environ[provider] = value;
+            return JSONResponse({'ok': True});
+        }
+        self.server.add_endpoint(JEndPoint(
+            method=HTTPMethod.POST, path='/admin/llm/proxy/providers',
+            callback=llm_providers_handler, parameters=[],
+            response_model=None, tags=['Admin'], summary='Set provider API key (runtime only)'
+        ));
+    }
     logger.info("Admin portal endpoints registered at /admin");
 }
 

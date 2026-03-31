@@ -32,10 +32,17 @@ impl UserManager._ensure_connection -> None {
             username TEXT PRIMARY KEY,
             password_hash TEXT NOT NULL,
             token TEXT UNIQUE NOT NULL,
-            root_id TEXT NOT NULL
+            root_id TEXT NOT NULL,
+            litellm_key TEXT
         )
         """
     );
+    # Migrate existing DBs that predate litellm_key column
+    try {
+        self._conn.execute("ALTER TABLE users ADD COLUMN litellm_key TEXT");
+    } except Exception {
+        # Column already exists — ignore
+    }
     self._conn.execute("CREATE INDEX IF NOT EXISTS idx_users_token ON users(token)");
     self._conn.commit();
 }
@@ -63,6 +70,25 @@ impl UserManager.create_user(username: str, password: str) -> dict[str, str] {
         (username, password_hash, token, root_id)
     );
     self._conn.commit();
+    # Provision a LiteLLM virtual key if proxy is configured via env vars
+    proxy_url = os.environ.get('LITELLM_PROXY_URL', '');
+    master_key = os.environ.get('LITELLM_MASTER_KEY', '');
+    if proxy_url and master_key {
+        try {
+            import requests;
+            headers = {'Authorization': f"Bearer {master_key}", 'Content-Type': 'application/json'};
+            requests.post(f"{proxy_url}/user/new", json={'user_id': username}, headers=headers, timeout=5.0);
+            key_resp = requests.post(f"{proxy_url}/key/generate", json={'user_id': username}, headers=headers, timeout=5.0);
+            if key_resp.ok {
+                litellm_key = key_resp.json().get('key');
+                if litellm_key {
+                    self.set_litellm_key(username, litellm_key);
+                }
+            }
+        } except Exception {
+            # Proxy unreachable — user created without a key, will fail on first LLM call if proxy required
+        }
+    }
     return {'username': username, 'token': token, 'root_id': root_id};
 }
 
@@ -105,13 +131,13 @@ impl UserManager.get_root_id(username: str) -> (str | None) {
 impl UserManager.get_user(username: str) -> (dict[(str, str)] | None) {
     self._ensure_connection();
     cursor = self._conn.execute(
-        "SELECT token, root_id FROM users WHERE username = ?", (username, )
+        "SELECT token, root_id, litellm_key FROM users WHERE username = ?", (username, )
     );
     row = cursor.fetchone();
     if not row {
         return None;
     }
-    return {'email': username, 'token': row[0], 'root_id': row[1]};
+    return {'email': username, 'token': row[0], 'root_id': row[1], 'litellm_key': row[2]};
 }
 
 """Check if a user exists."""
@@ -174,6 +200,15 @@ impl UserManager.update_password(
     );
     self._conn.commit();
     return {'username': username, 'message': 'Password updated successfully'};
+}
+
+"""Store a LiteLLM virtual key for the user."""
+impl UserManager.set_litellm_key(username: str, key: str) -> None {
+    self._ensure_connection();
+    self._conn.execute(
+        "UPDATE users SET litellm_key = ? WHERE username = ?", (key, username)
+    );
+    self._conn.commit();
 }
 
 """Close SQLite connection."""
@@ -291,6 +326,16 @@ impl ExecutionManager.spawn_walker(
     if user_llm_key_cv is not None {
         user_data = self.user_manager.get_user(username);
         litellm_key = user_data.get('litellm_key') if user_data else None;
+        if litellm_key {
+            logging.getLogger("jaclang.runtimelib.server").debug(
+                f"spawn_walker: user='{username}' litellm_key={litellm_key[:10]}... (injecting into context)"
+            );
+        } else {
+            logging.getLogger("jaclang.runtimelib.server").warning(
+                f"spawn_walker: user='{username}' litellm_key=None — "
+                "user has no LiteLLM virtual key; LLM calls via proxy will fail"
+            );
+        }
         llm_key_token = user_llm_key_cv.set(litellm_key);
     }
     try {

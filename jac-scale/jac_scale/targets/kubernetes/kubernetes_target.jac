@@ -31,6 +31,7 @@ import from jac_scale.providers.database.kubernetes_redis { KubernetesRedisProvi
 import from jac_scale.factories.database_factory { DatabaseProviderFactory }
 import from jac_scale.factories.registry_factory { ImageRegistryFactory }
 import from jac_scale.targets.kubernetes.monitoring { MonitoringDeployer }
+import from jac_scale.targets.kubernetes.litellm { LiteLLMDeployer }
 import from jac_scale.targets.kubernetes.ingress { IngressDeployer }
 import from jac_scale.targets.kubernetes.hpa.hpa { create_hpa }
 import time;
@@ -1402,6 +1403,14 @@ obj KubernetesTarget(DeploymentTarget) {
             self._deploy_network_policy(app_name, namespace, networking_v1);
             details["deploy_network_policy"] = "Successful";
 
+            # 13c. Deploy LiteLLM proxy pod and inject LITELLM_PROXY_URL into the app
+            if self.k8s_config.litellm_enabled {
+                litellm_deployer = LiteLLMDeployer(self.k8s_config, self.logger);
+                litellm_url = litellm_deployer.deploy(app_name, namespace, apps_v1, core_v1);
+                self.env_list.append({'name': 'LITELLM_PROXY_URL', 'value': litellm_url});
+                details["deploy_litellm"] = "Successful";
+            }
+
             # 14. Deploy main application
             if self.logger {
                 self.logger.info(f'Deploying Jaseci-app app...');
@@ -1903,11 +1912,15 @@ obj KubernetesTarget(DeploymentTarget) {
         } elif component == 'monitoring' {
             monitoring = MonitoringDeployer(self.k8s_config, self.logger);
             monitoring.destroy(app_name, namespace, apps_v1, core_v1);
+        } elif component == 'litellm' {
+            LiteLLMDeployer(self.k8s_config, self.logger).destroy(
+                app_name, namespace, apps_v1, core_v1
+            );
         } elif component == 'dashboard' {
             self._destroy_dashboard(app_name, namespace, apps_v1, core_v1);
         } else {
             raise ValueError(
-                f"Unknown component: '{component}'. Valid choices: application, database, cache, monitoring, dashboard"
+                f"Unknown component: '{component}'. Valid choices: application, database, cache, monitoring, litellm, dashboard"
             );
         }
         if self.logger {
@@ -1958,6 +1971,13 @@ obj KubernetesTarget(DeploymentTarget) {
             # Delete monitoring stack (Prometheus / Grafana)
             monitoring = MonitoringDeployer(self.k8s_config, self.logger);
             monitoring.destroy(app_name, namespace, apps_v1, core_v1);
+
+            # Delete LiteLLM proxy if enabled
+            if self.k8s_config.litellm_enabled {
+                LiteLLMDeployer(self.k8s_config, self.logger).destroy(
+                    app_name, namespace, apps_v1, core_v1
+                );
+            }
 
             # Delete databases
             self._destroy_databases(app_name, namespace, apps_v1, core_v1);

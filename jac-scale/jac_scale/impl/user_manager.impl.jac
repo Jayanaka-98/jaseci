@@ -85,9 +85,26 @@ impl JacScaleUserManager._ensure_connection -> None {
 # User CRUD - delegate to storage or parent
 # ============================================================================
 impl JacScaleUserManager.create_user(username: str, password: str) -> dict[str, str] {
-    return self._storage.create_user(username, password)
+    result = (
+        self._storage.create_user(username, password)
         if self._storage
-        else super.create_user(username, password);
+        else super.create_user(username, password)
+    );
+    if 'error' not in result {
+        # Provision a LiteLLM virtual key for the new user
+        try {
+            import from jac_scale.litellm_manager { get_litellm_proxy_manager }
+            litellm_mgr = get_litellm_proxy_manager();
+            if litellm_mgr is not None {
+                litellm_mgr.create_user(username, limits={});
+                litellm_key = litellm_mgr.generate_key(username, limits={});
+                self.set_litellm_key(username, litellm_key);
+            }
+        } except Exception {
+            # Proxy unavailable — user created without key, will fail on first LLM call if proxy required
+        }
+    }
+    return result;
 }
 
 impl JacScaleUserManager.authenticate(
@@ -105,9 +122,39 @@ impl JacScaleUserManager.get_root_id(username: str) -> (str | None) {
 }
 
 impl JacScaleUserManager.get_user(username: str) -> (dict[(str, str)] | None) {
-    return self._storage.get_user(username)
+    user = (
+        self._storage.get_user(username)
         if self._storage
-        else super.get_user(username);
+        else super.get_user(username)
+    );
+    # Lazily provision a LiteLLM virtual key for users created before the proxy
+    # was enabled. This ensures existing users can make LLM calls without needing
+    # to be re-created.
+    if user is not None and not user.get('litellm_key') {
+        try {
+            import from jac_scale.litellm_manager { get_litellm_proxy_manager }
+            litellm_mgr = get_litellm_proxy_manager();
+            if litellm_mgr is not None {
+                # create_user is idempotent — ignore errors (user may already exist in proxy)
+                try {
+                    litellm_mgr.create_user(username, limits={});
+                } except Exception {
+                    # User likely already registered in proxy; proceed to key generation
+                }
+                litellm_key = litellm_mgr.generate_key(username, limits={});
+                self.set_litellm_key(username, litellm_key);
+                user['litellm_key'] = litellm_key;
+                logger.info(f"LiteLLM: provisioned key for '{username}'");
+            }
+        } except Exception as e {
+            import traceback as _tb;
+            logger.warning(
+                f"LiteLLM: could not provision key for '{username}': {e}\n"
+                + _tb.format_exc()
+            );
+        }
+    }
+    return user;
 }
 
 impl JacScaleUserManager.user_exists(username: str) -> bool {
@@ -556,7 +603,30 @@ impl JacScaleUserManager.list_all_users(
     ];
 }
 
+impl JacScaleUserManager.set_litellm_key(username: str, key: str) -> None {
+    if self._storage {
+        self._storage.set_litellm_key(username, key);
+    } else {
+        super.set_litellm_key(username, key);
+    }
+}
+
 impl JacScaleUserManager.delete_user(username: str) -> dict[str, str] {
+    # Revoke LiteLLM virtual key before removing the user record
+    try {
+        import from jac_scale.litellm_manager { get_litellm_proxy_manager }
+        litellm_mgr = get_litellm_proxy_manager();
+        if litellm_mgr is not None {
+            user_data = self.get_user(username);
+            litellm_key = user_data.get('litellm_key') if user_data else None;
+            if litellm_key {
+                litellm_mgr.revoke_key(litellm_key);
+            }
+            litellm_mgr.delete_user(username);
+        }
+    } except Exception {
+        # Best-effort — proceed with user deletion even if proxy revocation fails
+    }
     if self._storage {
         return self._storage.delete_user(username, self.ADMIN_USER_ID);
     }
@@ -612,6 +682,21 @@ impl JacScaleUserManager.bootstrap_admin_user -> dict[str, str] {
                 }
             }
             logger.info(f"Existing user '{admin_username}' promoted to admin role");
+        }
+        # If LiteLLM proxy is now running but the admin has no virtual key, provision one.
+        if not existing_admin.get('litellm_key') {
+            try {
+                import from jac_scale.litellm_manager { get_litellm_proxy_manager }
+                litellm_mgr = get_litellm_proxy_manager();
+                if litellm_mgr is not None {
+                    litellm_mgr.create_user(admin_username, limits={});
+                    litellm_key = litellm_mgr.generate_key(admin_username, limits={});
+                    self.set_litellm_key(admin_username, litellm_key);
+                    logger.info(f"Provisioned LiteLLM virtual key for existing admin '{admin_username}'");
+                }
+            } except Exception as e {
+                logger.warning(f"Could not provision LiteLLM key for admin '{admin_username}': {e}");
+            }
         }
         return {'message': 'Admin user already exists', 'username': admin_username};
     }

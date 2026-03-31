@@ -1,10 +1,13 @@
 """Placeholder page for unimplemented sections."""
 
 cl {
+    import from react { useEffect }
     import from ....components.common.EmptyState { PlaceholderCard }
     import from ....components.common.Button { Button }
     import from ....components.common.Input { Input, TextArea }
     import from ....components.common.Card { Card, CardHeader, CardBody }
+    import from ....context.AuthContext { useAuth }
+    import from ....services.healthService { getHealthStatus }
 
     def:pub SessionsPage -> JsxElement {
         return
@@ -94,41 +97,144 @@ cl {
     }
 
     def:pub HealthPage -> JsxElement {
+        has health: dict = {},
+            loading: bool = True,
+            errorMsg: str = "";
+        auth = useAuth();
+
+        def statusDot(status: str) -> JsxElement {
+            colorClass = (
+                "bg-emerald-500" if status == "ok" or status == "healthy" or status == "connected"
+                else ("bg-red-500" if status == "error" or status == "unhealthy"
+                else "bg-slate-500")
+            );
+            return <div className={f"w-2 h-2 rounded-full {colorClass}"}></div>;
+        }
+
+        def statusLabel(status: str) -> str {
+            return (
+                "Healthy" if status == "ok"
+                else ("Connected" if status == "connected"
+                else ("Healthy" if status == "healthy"
+                else ("Unhealthy" if status == "unhealthy"
+                else ("Error" if status == "error"
+                else ("Not configured" if status == "not_configured"
+                else "Unknown")))))
+            );
+        }
+
+        async def loadHealth -> None {
+            result = await getHealthStatus(auth["authToken"]);
+            if result and not result["error"] {
+                health = result;
+                errorMsg = "";
+            } elif result and result["error"] {
+                errorMsg = (result["error"]["message"] or "Failed to load health status");
+            }
+            loading = False;
+        }
+
+        useEffect(lambda  -> None { loadHealth();}, []);
+
+        useEffect(
+            lambda  -> any {
+                interval = setInterval(lambda  -> None { loadHealth();}, 30000);
+                return lambda  -> None { clearInterval(interval);};
+            },
+            []
+        );
+
+        apiData = (health["api_server"] or {}) if health else {};
+        apiStatus = apiData["status"] or "unknown";
+        dbData = (health["database"] or {}) if health else {};
+        dbStatus = dbData["status"] or "unknown";
+        litellmData = (health["litellm"] or {}) if health else {};
+        litellmStatus = litellmData["status"] or "unknown";
+        litellmUrl = litellmData["url"] or None;
+
         return
             <div
                 className="bg-slate-900 border border-slate-800 rounded-lg overflow-hidden"
             >
-                <div className="px-4 py-3 border-b border-slate-800">
+                <div
+                    className="flex items-center justify-between px-4 py-3 border-b border-slate-800"
+                >
                     <h2 className="text-sm font-medium text-white">
                         Health Status
                     </h2>
+                    {litellmUrl and
+                        <button
+                            onClick={lambda e: Any  -> None {
+                                window.open("/admin/llm-ui?t=" + encodeURIComponent(auth["authToken"]), "_blank");
+                            }}
+                            className="px-3 py-1 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded transition-colors"
+                        >
+                            Open LiteLLM UI
+                        </button>
+                    }
                 </div>
-                <div className="p-4 grid grid-cols-2 gap-3">
-                    <div className="bg-slate-950 border border-slate-800 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                            <span className="text-sm text-white">
-                                API Server
-                            </span>
-                        </div>
-                        <p className="text-xs text-slate-500">
-                            Healthy
+                {loading and
+                    <div className="p-8 text-center">
+                        <p className="text-slate-500 text-sm">
+                            Loading health status...
                         </p>
                     </div>
-                    <div
-                        className="bg-slate-950 border border-slate-800 rounded-lg p-4"
-                    >
-                        <div className="flex items-center gap-2 mb-2">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                            <span className="text-sm text-white">
-                                Database
-                            </span>
-                        </div>
-                        <p className="text-xs text-slate-500">
-                            Connected
+                }
+                {errorMsg and
+                    <div className="p-4">
+                        <p className="text-red-400 text-sm">
+                            {f"Failed to load health status: {errorMsg}"}
                         </p>
                     </div>
-                </div>
+                }
+                {not loading and not errorMsg and
+                    <div className="p-4 grid grid-cols-2 gap-3">
+                        <div
+                            className="bg-slate-950 border border-slate-800 rounded-lg p-4"
+                        >
+                            <div className="flex items-center gap-2 mb-2">
+                                {statusDot(apiStatus)}
+                                <span className="text-sm text-white">
+                                    API Server
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                {statusLabel(apiStatus)}
+                            </p>
+                        </div>
+                        <div
+                            className="bg-slate-950 border border-slate-800 rounded-lg p-4"
+                        >
+                            <div className="flex items-center gap-2 mb-2">
+                                {statusDot(dbStatus)}
+                                <span className="text-sm text-white">
+                                    Database
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                {statusLabel(dbStatus)}
+                            </p>
+                        </div>
+                        <div
+                            className="bg-slate-950 border border-slate-800 rounded-lg p-4 col-span-2"
+                        >
+                            <div className="flex items-center gap-2 mb-2">
+                                {statusDot(litellmStatus)}
+                                <span className="text-sm text-white">
+                                    LiteLLM Proxy
+                                </span>
+                            </div>
+                            <p className="text-xs text-slate-500">
+                                {statusLabel(litellmStatus)}
+                            </p>
+                            {litellmUrl and
+                                <p className="text-xs text-slate-600 mt-1 font-mono">
+                                    {litellmUrl}
+                                </p>
+                            }
+                        </div>
+                    </div>
+                }
             </div>;
     }
 

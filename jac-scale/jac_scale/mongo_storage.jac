@@ -62,12 +62,17 @@ obj MongoUserStorage {
 
     def get_user(username: str) -> (dict[str, str] | None) {
         user = self.users_col.find_one(
-            {'username': username}, {'token': 1, 'root_id': 1, '_id': 0}
+            {'username': username}, {'token': 1, 'root_id': 1, 'litellm_key': 1, '_id': 0}
         );
         if not user {
             return None;
         }
-        return {'email': username, 'token': user['token'], 'root_id': user['root_id']};
+        return {
+            'email': username,
+            'token': user['token'],
+            'root_id': user['root_id'],
+            'litellm_key': user.get('litellm_key')
+        };
     }
 
     def user_exists(username: str) -> bool {
@@ -296,6 +301,10 @@ obj MongoUserStorage {
             );
         }
         return users;
+    }
+
+    def set_litellm_key(username: str, key: str) -> None {
+        self.users_col.update_one({'username': username}, {'$set': {'litellm_key': key}});
     }
 
     def delete_user(username: str, admin_user_id: str) -> dict[str, str] {

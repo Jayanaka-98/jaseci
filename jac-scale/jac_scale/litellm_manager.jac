@@ -93,11 +93,13 @@ obj LiteLLMProxyManager {
 
     # Internal helpers
     def _is_k8s_mode -> bool;
+    def _load_or_generate_master_key -> str;
     def _resolve_models -> list[dict[str, Any]];
     def _build_config_yaml(models: list[dict[str, Any]]) -> str;
     def _convert_env_var_refs(value: str) -> str;
     def _admin_post(path: str, body: dict[str, Any]) -> dict[str, Any];
     def _admin_delete(path: str, body: dict[str, Any]) -> None;
+    def _wait_for_startup_signal -> None;
     def _wait_for_health -> None;
 }
 

@@ -60,4 +60,14 @@ cl {
                  {"id": "security", "label": "Security Events"}
              ]
          };
+
+    # LLM Proxy category — injected into navigation dynamically when proxy is active
+    glob:pub llmCategory = {"id": "llm", "label": "LLM Proxy", "default": "keys"};
+
+    glob:pub llmSubTabs = [
+             {"id": "keys", "label": "Virtual Keys"},
+             {"id": "users", "label": "Users & Budgets"},
+             {"id": "spend", "label": "Spend"},
+             {"id": "providers", "label": "Providers"}
+         ];
 }

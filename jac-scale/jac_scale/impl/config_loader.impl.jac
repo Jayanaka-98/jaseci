@@ -74,8 +74,8 @@ impl JacScaleConfig.get_default_config(self: JacScaleConfig) -> dict[str, Any] {
             'port': 4000,
             'master_key': '',
             'proxy_url': '',
-            'health_check_retries': 10,
-            'health_check_interval': 2,
+            'health_check_retries': 30,
+            'health_check_interval': 3,
             'models': [],
             'defaults': {
                 'max_budget': None,
@@ -366,8 +366,8 @@ impl JacScaleConfig.get_litellm_config(self: JacScaleConfig) -> dict[str, Any] {
         'port': port,
         'master_key': master_key,
         'proxy_url': proxy_url,
-        'health_check_retries': int(ll.get('health_check_retries', 10)),
-        'health_check_interval': int(ll.get('health_check_interval', 2)),
+        'health_check_retries': int(ll.get('health_check_retries', 30)),
+        'health_check_interval': int(ll.get('health_check_interval', 3)),
         'models': ll.get('models', []),
         'defaults': {
             'max_budget': defaults.get('max_budget', None),
