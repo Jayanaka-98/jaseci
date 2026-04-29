@@ -141,4 +141,17 @@ class JacRuntime {
         JacRuntime._cached_default_llm = instance;
         return instance;
     }
+
+    """Return a cached GraphExplorer for the given module, constructing it on first access."""
+    static def get_graph_explorer(module_name: str) -> object {
+        import from byllm.osp_explorer { GraphExplorer }
+        cache: dict = JacRuntime?._cached_graph_explorers or {};
+        if module_name in cache {
+            return cache[module_name];
+        }
+        explorer = GraphExplorer(module_name=module_name);
+        cache[module_name] = explorer;
+        JacRuntime._cached_graph_explorers = cache;
+        return explorer;
+    }
 }

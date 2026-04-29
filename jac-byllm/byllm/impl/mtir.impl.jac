@@ -143,6 +143,22 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
             system_content = config_system_prompt;
         }
     } except Exception { }
+    # useGraph: inject OSP graph explorer as a tool and topology as system context.
+    if call_params.get("useGraph", False) {
+        try {
+            import from byllm.plugin { JacRuntime as _ByLLMRuntime }
+            _module_name = getattr(caller, "__module__", "__main__");
+            _explorer = _ByLLMRuntime.get_graph_explorer(_module_name);
+            _ctx_fn = getattr(_explorer, "graph_context_block", None);
+            _query_fn = getattr(_explorer, "query_graph", None);
+            if _ctx_fn is not None {
+                system_content = system_content + "\n\n" + str(_ctx_fn());
+            }
+            if _query_fn is not None {
+                tools.append(Tool(_query_fn));  # type: ignore
+            }
+        } except Exception { }
+    }
     # Prepare the messages for the LLM call.
     messages: list[MessageType] = [
         Message(
