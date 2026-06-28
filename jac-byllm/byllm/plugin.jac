@@ -119,7 +119,8 @@ class JacRuntime {
             isinstance(element, (NodeArchetype, EdgeArchetype)) for element in lhs_list
         )
         and isinstance(rhs, BaseLLM) {
-            return Jac.filter_visitable_by(lhs_list, rhs);
+            import from byllm.visit_routing { route_visit }
+            return route_visit(lhs_list, rhs);
         }
         raise NotImplementedError(
             "The 'by' operator requires visitable nodes on the left and an LLM model on the right."

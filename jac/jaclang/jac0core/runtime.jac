@@ -685,10 +685,6 @@ class JacLLM {
     @hookable
     static def `by(model: LLMModel) -> Callable;
 
-    static def filter_visitable_by(
-        connected_nodes: list[NodeArchetype], model: LLMModel, descriptions: str = ''
-    ) -> list[NodeArchetype];
-
     """by operator feature for expression composition.
 
         Currently not implemented - raises NotImplementedError.

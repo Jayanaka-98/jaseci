@@ -2086,36 +2086,6 @@ impl JacLLM.`by(model: LLMModel) -> Callable {
     return _decorator;
 }
 
-impl JacLLM.filter_visitable_by(
-    connected_nodes: list[NodeArchetype], model: LLMModel, descriptions: str = ''
-) -> list[NodeArchetype] {
-    import from jaclang.jac0core.helpers { _describe_nodes_list }
-    visitable_list: list = [];
-    """
-        Determine which connected nodes are visitable using an LLM.
-
-        The input represents structurally reachable nodes. This function
-applies
-        semantic reasoning to decide which of those nodes a walker is
-allowed
-        or intended to visit, returning their indexes in priority order.
-
-        Returns an empty list if no nodes are deemed visitable.
-        """;
-    @JacLLM.by (model=model)
-    def _filter_visitable_by(
-        connected_nodes: list[NodeArchetype], descriptions: str = ''
-    ) -> list[int] {
-        return [];
-    }
-    descriptions = _describe_nodes_list(connected_nodes);
-    indexes = _filter_visitable_by(connected_nodes, descriptions);
-    for idx in indexes {
-        visitable_list.append(connected_nodes[idx]);
-    }
-    return visitable_list;
-}
-
 """by operator feature for expression composition.
 
     Currently not implemented - raises NotImplementedError.
