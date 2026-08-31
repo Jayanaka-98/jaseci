@@ -1556,9 +1556,9 @@ Cached input tokens are billed at a fraction of the normal rate, so a high hit r
 
 ---
 
-## Multimodal Inputs
+## Multimodal
 
-byLLM supports image and video inputs through the `Image` and `Video` types. These can be used as parameters in any `by llm()` function or method.
+byLLM supports image, audio and video inputs through the `Image`, `Audio` and `Video` types. These can be used as parameters in any `by llm()` function or method. `Image` and `Audio` also work as *return* types, asking the model to produce media rather than describe it -- see [Media Outputs](#media-outputs).
 
 ### Image Type
 
@@ -1693,9 +1693,118 @@ obj VideoAnalysis {
 def analyze_video(video: Video) -> VideoAnalysis by llm();
 ```
 
+### Audio Type
+
+The `Audio` type carries a clip into any `by llm()` call on an audio-capable model:
+
+```jac
+import from jaclang.byllm.lib { Audio, Model }
+
+glob llm = Model(model_name="gemini/gemini-2.5-flash");
+
+"""Transcribe exactly what is spoken in this audio clip."""
+def transcribe(clip: Audio) -> str by llm();
+
+with entry {
+    print(transcribe(Audio("meeting.wav")));
+}
+```
+
+#### Supported Input Formats
+
+| Format | Example |
+|--------|---------|
+| File path | `Audio("clip.wav")` |
+| Data URL | `Audio("data:audio/wav;base64,...")` |
+| Bytes | `Audio(raw_bytes)` |
+| BytesIO / file-like | `Audio(buffer)` |
+| pathlib.Path | `Audio(Path("clip.mp3"))` |
+
+The container is taken from the file extension, falling back to sniffing the
+leading magic bytes (`wav`, `mp3`, `ogg`, `flac`, `aiff`), and can be set
+explicitly with `Audio(path, format="mp3")`. Unlike `Image`, there is no
+remote-URL passthrough: no provider accepts an audio URL in a chat message, so
+the clip is always inlined as base64.
+
+Audio inputs combine with structured return types the same way images do:
+
+```jac
+obj Speech {
+    has transcript: str;
+    has language: str;
+    has word_count: int;
+}
+
+"""Transcribe the clip and report its language and word count."""
+def analyze(clip: Audio) -> Speech by llm();
+```
+
+### Media Outputs
+
+Declaring `Image` or `Audio` as the **return** type asks the model to produce
+that medium. byLLM picks the transport from the return type and the model's
+capabilities; the return type is the contract, the transport is an
+implementation detail.
+
+```jac
+import from jaclang.byllm.lib { Audio, Image, Model }
+
+glob speaker = Model(model_name="gpt-audio"),
+     painter = Model(model_name="gemini/gemini-2.5-flash-image");
+
+"""Say this sentence aloud, warmly."""
+def narrate(line: str) -> Audio by speaker(voice="alloy", audio_format="wav");
+
+"""Draw the described picture."""
+def draw(subject: str) -> Image by painter();
+
+with entry {
+    clip = narrate("Jac now speaks.");
+    print(clip.transcript);          # what the model said
+    clip.save("spoken.wav");
+
+    picture = draw("a red fox in snow, flat vector style");
+    picture.save("fox.png");
+}
+```
+
+`Audio` returns carry both the spoken payload and its `transcript`. Both types
+gain a `save(path)` method that writes the decoded bytes to disk.
+
+#### Audio Output Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `voice` | `"alloy"` | Voice for the spoken reply |
+| `audio_format` | `"wav"` | Container for the returned audio |
+
+#### Which Models Work
+
+| Return type | Model | Transport |
+|-------------|-------|-----------|
+| `Image` | Gemini image models (`gemini/gemini-2.5-flash-image`) | Inline on the chat completion |
+| `Audio` | Audio-capable chat models (`gpt-audio`, `gpt-4o-audio-preview`) | Inline on the chat completion |
+| `Image` | Dedicated image models (`dall-e-3`, `gpt-image-1`) | Not yet routed |
+| `Audio` | Dedicated TTS models (`tts-1`) | Not yet routed |
+| `Video` | Any | Not yet routed |
+
+A model that cannot deliver the declared type raises `ConfigurationError` at
+call time naming one that can, rather than failing deep inside the provider.
+Note that declaring image output is not by itself sufficient: OpenAI's `gpt-5.1`
+lists `image` among its output modalities but serves it through the Responses
+API, so byLLM routes it to the (not yet supported) dedicated endpoint instead of
+returning prose with no picture.
+
+!!! note "Media returns do not combine with tools or streaming"
+    `by llm(tools=[...])` feeds results back through `finish_tool`, which
+    carries JSON rather than media, and `by llm(stream=True)` streams tokens
+    while generated media arrives as one payload. Both combinations raise
+    `ConfigurationError` up front.
+
 ### Multimodal with Tools
 
-Image and video inputs work with tool calling:
+Image, audio and video *inputs* work with tool calling (media *returns* do not,
+see above):
 
 ```jac
 import from jaclang.byllm.lib { Image }

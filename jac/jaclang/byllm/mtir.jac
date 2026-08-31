@@ -17,6 +17,7 @@ import from jaclang.byllm.types {
     ToolCallResultMsg
 }
 import from jaclang.byllm.mcp { McpTool }
+import from jaclang.byllm.media_routing { media_kind }
 
 obj MTIR {
     has caller: Callable,

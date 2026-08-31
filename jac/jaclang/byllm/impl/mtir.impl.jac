@@ -179,6 +179,24 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
 
     return_type = get_type_hints(caller).get("return");
     is_streaming = bool(call_params.get("stream", False));
+    media_out = media_kind(return_type);
+    if media_out {
+        if tools {
+            raise ConfigurationError(
+                f"`by llm(tools=...)` cannot be combined with a {media_out} "
+                f"return type: tool results are fed back through finish_tool, "
+                f"which carries JSON, not media. Return a value the tools can "
+                f"describe, or drop the tools."
+            );
+        }
+        if is_streaming {
+            raise ConfigurationError(
+                f"`by llm(stream=True)` cannot be combined with a {media_out} "
+                f"return type: generated media arrives as one payload, not as "
+                f"a token stream."
+            );
+        }
+    }
     if is_streaming
         and return_type is not str
         and call_params.get("stream_handler") is None {
@@ -343,6 +361,9 @@ impl MTRuntime.get_output_schema -> dict | None {
 
 impl MTRuntime.get_typed_output_schema -> dict | None {
     if self.resp_type is None or self.resp_type is str {
+        return None;
+    }
+    if media_kind(self.resp_type) {
         return None;
     }
 

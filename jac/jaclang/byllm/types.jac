@@ -144,6 +144,33 @@ obj Image(Media) {
     def postinit -> None;
     def _format_to_mime(fmt: str | None) -> str;
     def _data_url_from_bytes(data: bytes, fmt: str | None) -> str;
+    def save(path: str) -> str;
+    def to_dict -> list[dict];
+}
+
+glob DEFAULT_AUDIO_FORMAT = "wav";
+
+obj Audio(Media) {
+    has src:
+        (
+            str
+            | bytes
+            | bytearray
+            | memoryview
+            | BytesIO
+            | IO[bytes]
+            | os.PathLike[str]
+            | os.PathLike[bytes]
+        ),
+        format: str | None = None,
+        transcript: str = "",
+        _b64: str = "";
+
+    def postinit -> None;
+    static def from_b64(data: str, fmt: str = "", transcript: str = "") -> Audio;
+    static def _format_from_name(name: str) -> str | None;
+    static def _format_from_magic(data: bytes) -> str;
+    def save(path: str) -> str;
     def to_dict -> list[dict];
 }
 
@@ -219,8 +246,8 @@ def content_preview(content: any, max_len: int) -> str {
 }
 
 
-def reroute_tool_images_to_user_message(messages: list) -> list {
-    if not any(_tool_msg_has_image(m) for m in messages) {
+def reroute_tool_media_to_user_message(messages: list) -> list {
+    if not any(_tool_msg_has_media(m) for m in messages) {
         return messages;
     }
 
@@ -228,8 +255,8 @@ def reroute_tool_images_to_user_message(messages: list) -> list {
     pending: list = [];
 
     for msg in messages {
-        if _tool_msg_has_image(msg) {
-            (stripped, images) = _split_tool_msg_images(msg);
+        if _tool_msg_has_media(msg) {
+            (stripped, images) = _split_tool_msg_media(msg);
             out.append(stripped);
             name = msg.get("name", "tool");
             call_id = msg.get("tool_call_id", "");
@@ -254,12 +281,15 @@ def reroute_tool_images_to_user_message(messages: list) -> list {
 }
 
 
+glob _MEDIA_BLOCK_TYPES: tuple = ("image_url", "image", "input_audio");
+
+
 def _is_tool_msg(msg: object) -> bool {
     return isinstance(msg, dict) and msg.get("role") == "tool";
 }
 
 
-def _tool_msg_has_image(msg: object) -> bool {
+def _tool_msg_has_media(msg: object) -> bool {
     if not (isinstance(msg, dict) and msg.get("role") == "tool") {
         return False;
     }
@@ -268,7 +298,7 @@ def _tool_msg_has_image(msg: object) -> bool {
         return False;
     }
     for block in content {
-        if isinstance(block, dict) and block.get("type") in ("image_url", "image") {
+        if isinstance(block, dict) and block.get("type") in _MEDIA_BLOCK_TYPES {
             return True;
         }
     }
@@ -276,7 +306,7 @@ def _tool_msg_has_image(msg: object) -> bool {
 }
 
 
-def _split_tool_msg_images(msg: dict) -> tuple {
+def _split_tool_msg_media(msg: dict) -> tuple {
     content = msg.get("content");
     if not isinstance(content, list) {
         return (msg, []);
@@ -284,7 +314,7 @@ def _split_tool_msg_images(msg: dict) -> tuple {
     text_blocks: list = [];
     image_blocks: list = [];
     for block in content {
-        if isinstance(block, dict) and block.get("type") in ("image_url", "image") {
+        if isinstance(block, dict) and block.get("type") in _MEDIA_BLOCK_TYPES {
             image_blocks.append(block);
         } else {
             text_blocks.append(block);
@@ -300,7 +330,7 @@ def _split_tool_msg_images(msg: dict) -> tuple {
     if text_only {
         stripped_content = " ".join(b.get("text", "") for b in text_blocks).strip();
         if not stripped_content {
-            stripped_content = "(image attached in following user message)";
+            stripped_content = "(media attached in following user message)";
         }
     } else {
         stripped_content = text_blocks;
