@@ -618,17 +618,85 @@ def _parse_output(mt_run: MTRuntime, message: object, output_content: str) -> an
 }
 
 
-def _guard_media_route(model_name: str, mt_run: MTRuntime) {
-    route = resolve_route(mt_run.resp_type, model_name);
-    if route != ROUTE_CHAT {
+def _input_kinds(mt_run: MTRuntime) -> list {
+    return [media_kind(type(m)) for m in mt_run.media_args];
+}
+
+
+def _media_route(model_name: str, mt_run: MTRuntime) -> str {
+    route = resolve_route(mt_run.resp_type, model_name, _input_kinds(mt_run));
+    if route == ROUTE_UNSUPPORTED {
         raise ConfigurationError(route_error(route, mt_run.resp_type, model_name));
     }
+    return route;
+}
+
+
+def _first_audio_arg(mt_run: MTRuntime) -> Audio {
+    for arg in mt_run.media_args {
+        if isinstance(arg, Audio) {
+            return arg;
+        }
+    }
+    raise ConfigurationError(
+        "A transcription model needs an Audio argument to transcribe."
+    );
+}
+
+
+def _media_opts(config: dict, mt_run: MTRuntime) -> dict {
+    cp = mt_run.call_params;
+    inline = cp.get("config");
+    return {** config, ** (inline if isinstance(inline, dict) else {}), ** cp};
+}
+
+
+def _run_media_endpoint(
+    route: str, model_name: str, api_key: str, config: dict, mt_run: MTRuntime
+) -> object {
+    cp = _media_opts(config, mt_run);
+    if route == ROUTE_IMAGE_ENDPOINT {
+        return generate_image(mt_run.media_prompt, model_name, api_key, cp);
+    }
+    if route == ROUTE_SPEECH_ENDPOINT {
+        return synthesize_speech(
+            mt_run.media_text or mt_run.media_prompt, model_name, api_key, cp
+        );
+    }
+    if route == ROUTE_VIDEO_ENDPOINT {
+        return generate_video(mt_run.media_prompt, model_name, api_key, cp);
+    }
+    return transcribe(_first_audio_arg(mt_run), model_name, api_key, cp);
+}
+
+
+async def _arun_media_endpoint(
+    route: str, model_name: str, api_key: str, config: dict, mt_run: MTRuntime
+) -> object {
+    cp = _media_opts(config, mt_run);
+    if route == ROUTE_IMAGE_ENDPOINT {
+        return await agenerate_image(mt_run.media_prompt, model_name, api_key, cp);
+    }
+    if route == ROUTE_SPEECH_ENDPOINT {
+        return await asynthesize_speech(
+            mt_run.media_text or mt_run.media_prompt, model_name, api_key, cp
+        );
+    }
+    if route == ROUTE_VIDEO_ENDPOINT {
+        return await agenerate_video(mt_run.media_prompt, model_name, api_key, cp);
+    }
+    return await atranscribe(_first_audio_arg(mt_run), model_name, api_key, cp);
 }
 
 
 impl BaseLLM.ainvoke(mt_run: MTRuntime) -> any {
     import asyncio;
-    _guard_media_route(self.model_name, mt_run);
+    route = _media_route(self.model_name, mt_run);
+    if route != ROUTE_CHAT {
+        return await _arun_media_endpoint(
+            route, self.model_name, self.api_key, self.config, mt_run
+        );
+    }
     logging_stream = mt_run.stream and mt_run.call_params.get("logging", False);
     no_tools = len(mt_run.tools) == 0;
     if not mt_run.stream and no_tools and not logging_stream {
@@ -647,7 +715,12 @@ impl BaseLLM.__call__(**kwargs: object) -> BaseLLM {
 }
 
 impl BaseLLM.invoke(mt_run: MTRuntime) -> any {
-    _guard_media_route(self.model_name, mt_run);
+    route = _media_route(self.model_name, mt_run);
+    if route != ROUTE_CHAT {
+        return _run_media_endpoint(
+            route, self.model_name, self.api_key, self.config, mt_run
+        );
+    }
     handler = mt_run.call_params.get("stream_handler");
     if mt_run.stream and handler is not None and callable(handler) {
         return self._invoke_with_handler(mt_run, handler);
@@ -1240,7 +1313,7 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
         params["tool_choice"] = mt_run.call_params["tool_choice"];
     }
     if media_kind(mt_run.resp_type) == KIND_AUDIO {
-        params.update(audio_output_params(mt_run.call_params));
+        params.update(audio_output_params(_media_opts(self.config, mt_run)));
     }
 
     params = inject_schema_hint(params);

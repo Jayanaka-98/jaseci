@@ -1778,22 +1778,122 @@ gain a `save(path)` method that writes the decoded bytes to disk.
 | `voice` | `"alloy"` | Voice for the spoken reply |
 | `audio_format` | `"wav"` | Container for the returned audio |
 
+A voice belongs to the model more than to any one call, so these can be set on
+the model's `config` and left alone. All three placements work, most specific
+winning:
+
+```jac
+# On the model, for every call it serves.
+glob tts = Model(model_name="tts-1", config={"voice": "nova", "audio_format": "mp3"});
+
+# Per call, as a config dict.
+def announce(line: str) -> Audio by tts(config={"voice": "ash"});
+
+# Per call, inline.
+def announce(line: str) -> Audio by tts(voice="echo");
+```
+
 #### Which Models Work
+
+byLLM picks the transport from the return type and the model's capabilities.
+An inline chat route keeps the conversation intact; a dedicated endpoint is a
+single call that takes the prompt and returns bytes.
 
 | Return type | Model | Transport |
 |-------------|-------|-----------|
 | `Image` | Gemini image models (`gemini/gemini-2.5-flash-image`) | Inline on the chat completion |
-| `Audio` | Audio-capable chat models (`gpt-audio`, `gpt-4o-audio-preview`) | Inline on the chat completion |
-| `Image` | Dedicated image models (`dall-e-3`, `gpt-image-1`) | Not yet routed |
-| `Audio` | Dedicated TTS models (`tts-1`) | Not yet routed |
-| `Video` | Any | Not yet routed |
+| `Image` | Image models (`dall-e-3`, `gpt-image-1`) | `image_generation` endpoint |
+| `Audio` | Audio-capable chat models (`gpt-audio`) | Inline on the chat completion |
+| `Audio` | Speech models (`tts-1`, `gpt-4o-mini-tts`) | `speech` endpoint |
+| `Video` | Video models (`sora-2`, Veo) | `video_generation` endpoint, polled |
+| `str` from an `Audio` argument | Transcription models (`whisper-1`, `gpt-4o-transcribe`) | `transcription` endpoint |
 
-A model that cannot deliver the declared type raises `ConfigurationError` at
-call time naming one that can, rather than failing deep inside the provider.
-Note that declaring image output is not by itself sufficient: OpenAI's `gpt-5.1`
-lists `image` among its output modalities but serves it through the Responses
-API, so byLLM routes it to the (not yet supported) dedicated endpoint instead of
-returning prose with no picture.
+A model with no path to the declared medium raises `ConfigurationError` at call
+time naming one that has. Note that declaring image output is not by itself
+sufficient for the inline route: OpenAI's `gpt-5.1` lists `image` among its
+output modalities but serves it through the Responses API, so byLLM does not
+send it a chat completion expecting a picture back.
+
+#### Speech, Transcription and Video
+
+```jac
+import from jaclang.byllm.lib { Audio, Model, Video }
+
+glob tts = Model(model_name="tts-1"),
+     stt = Model(model_name="whisper-1"),
+     director = Model(model_name="sora-2");
+
+"""Read this announcement aloud."""
+def announce(line: str) -> Audio by tts(voice="nova", audio_format="mp3");
+
+"""Transcribe exactly what is spoken in this clip."""
+def transcribe(clip: Audio) -> str by stt();
+
+"""Film the described shot."""
+def film(shot: str) -> Video by director(seconds="4");
+```
+
+`Audio -> str` is the one signature the return type alone cannot resolve: it is
+an ordinary chat call on a multimodal chat model and a `transcription` call on
+a speech-to-text model, so the routing consults the argument as well.
+
+#### Generation Prompts
+
+The generation endpoints take a flat prompt rather than a message list, so
+byLLM renders one from the function's docstring and its argument values:
+
+```jac
+"""Draw the described picture."""
+def draw(subject: str, palette: str) -> Image by painter();
+
+# draw("a red fox in snow", "muted blues") sends:
+#
+#   Draw the described picture.
+#
+#   subject: a red fox in snow
+#   palette: muted blues
+```
+
+The chat system persona is deliberately absent: "return only the output, no
+explanations" is an instruction to a chat model, not part of a picture brief.
+
+**Speech is the exception.** A text-to-speech endpoint reads its input aloud
+verbatim, so the docstring would be *spoken* rather than obeyed. The `speech`
+route therefore receives the argument values only:
+
+```jac
+"""Read this announcement aloud."""
+def announce(line: str) -> Audio by tts();
+
+# announce("The gates close at six.") speaks exactly:
+#
+#   The gates close at six.
+```
+
+To direct *how* a line is delivered, pass `instructions` (supported by
+`gpt-4o-mini-tts` and newer, ignored by `tts-1`):
+
+```jac
+def announce(line: str) -> Audio by tts(instructions="Warm and unhurried.");
+```
+
+#### Video Generation is a Job
+
+Every provider renders video asynchronously, so byLLM submits the job and polls
+until the bytes are ready. Sync and async fall out of the caller's own
+declaration: a `def` blocks in the poll loop, an `async def` awaits it.
+
+```jac
+"""Film the described shot."""
+async def film(shot: str) -> Video by director();
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `poll_interval` | `5.0` | Seconds between status checks |
+| `poll_timeout` | `600.0` | Give up after this long |
+
+Exceeding `poll_timeout` raises rather than hanging; widen it for a long render.
 
 !!! note "Media returns do not combine with tools or streaming"
     `by llm(tools=[...])` feeds results back through `finish_tool`, which

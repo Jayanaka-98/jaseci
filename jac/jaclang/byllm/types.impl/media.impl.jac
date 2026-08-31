@@ -280,9 +280,26 @@ impl Audio.to_dict -> list[dict] {
 }
 
 impl Video.postinit -> None {
+    if self.data is not None {
+        return;
+    }
     if not os.path.exists(self.path) {
         raise ValueError(f"Video file does not exist: {self.path}");
     }
+}
+
+impl Video.from_bytes(data: bytes) -> Video {
+    return Video(data=data);
+}
+
+impl Video.save(path: str) -> str {
+    if self.data is None {
+        raise ValueError("Video has no payload to save; it was built from a path.");
+    }
+    with open(path, "wb") as fh {
+        fh.write(self.data);
+    }
+    return path;
 }
 
 impl Video.load_frames -> None {

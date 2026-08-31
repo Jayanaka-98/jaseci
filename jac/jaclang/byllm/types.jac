@@ -175,12 +175,15 @@ obj Audio(Media) {
 }
 
 obj Video(Media) {
-    has path: str,
+    has path: str = "",
         fps: int = 1,
+        data: bytes | None = None,
         _base64frames: list[str] | None = None;
 
     def postinit -> None;
+    static def from_bytes(data: bytes) -> Video;
     def load_frames -> None;
+    def save(path: str) -> str;
     def to_dict -> list[dict];
 }
 

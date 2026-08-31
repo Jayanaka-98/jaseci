@@ -50,6 +50,9 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
     }
 
     inputs_detail: list[str] = [];
+    flat_detail: list[str] = [];
+    flat_values: list[str] = [];
+    raw_media: list = [];
     media_inputs: list = [];
     if fn_info is not None and fn_info.params is not None {
         params = [param for param in fn_info.params];
@@ -57,8 +60,14 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
             idx = list(args.keys()).index(key);
             if isinstance(value, Media) {
                 media_inputs.append((value, params[idx].semstr or ""));
+                raw_media.append(value);
                 continue;
             }
+            flat_detail.append(
+                f"{params[idx].semstr
+                    or (params[idx].name if idx < len(params) else key)}: {value}"
+            );
+            flat_values.append(f"{value}");
 
             if isinstance(key, str) {
                 inputs_detail.append(f"{key} = {(value, params[idx].semstr or "")}");
@@ -77,8 +86,11 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
         for (key, value) in args.items() {
             if isinstance(value, Media) {
                 media_inputs.append((value, ""));
+                raw_media.append(value);
                 continue;
             }
+            flat_detail.append(f"{key}: {value}");
+            flat_values.append(f"{value}");
 
             if isinstance(key, str) {
                 inputs_detail.append(f"{key} = {value}");
@@ -96,6 +108,7 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
         for (key, value) in incl_info.items() {
             if isinstance(value, Media) {
                 media_inputs.append((value, ""));
+                raw_media.append(value);
             } else {
                 if has_mtir {
                     inputs_detail.append(f"{key} = {(value, "")}");
@@ -214,12 +227,27 @@ impl MTRuntime.factory(mtir: MTIR) -> MTRuntime {
             tools.append(Tool.make_finish_tool(return_type));
         }
     }
+
+    media_prompt = "";
+    if media_out or raw_media {
+        media_prompt = "\n\n".join(
+            [
+                part
+                for part in [Tool.get_func_description(caller), "\n".join(flat_detail)]
+                if part.strip()
+            ]
+        );
+    }
+    media_text = "\n".join(flat_values);
     mt_run = MTRuntime(
         messages=messages,
         tools=tools,
         resp_type=return_type,
         stream=is_streaming,
         call_params=call_params,
+        media_prompt=media_prompt,
+        media_text=media_text,
+        media_args=raw_media,
         mtir=mtir
     );
 

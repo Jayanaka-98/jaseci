@@ -4,7 +4,14 @@ import from jaclang.byllm.types { Audio, DEFAULT_AUDIO_FORMAT, Image, Video }
 glob ROUTE_CHAT = "chat",
      ROUTE_IMAGE_ENDPOINT = "image_endpoint",
      ROUTE_SPEECH_ENDPOINT = "speech_endpoint",
-     ROUTE_VIDEO_ENDPOINT = "video_endpoint";
+     ROUTE_VIDEO_ENDPOINT = "video_endpoint",
+     ROUTE_TRANSCRIPTION_ENDPOINT = "transcription_endpoint",
+     ROUTE_UNSUPPORTED = "unsupported";
+
+glob MODE_IMAGE = "image_generation",
+     MODE_SPEECH = "audio_speech",
+     MODE_TRANSCRIPTION = "audio_transcription",
+     MODE_VIDEO = "video_generation";
 
 glob KIND_NONE = "",
      KIND_IMAGE = "image",
@@ -41,6 +48,11 @@ def model_entry(model_name: str) -> dict {
 def output_modalities(model_name: str) -> list[str] {
     mods = model_entry(model_name).get("supported_output_modalities");
     return [str(m) for m in mods] if isinstance(mods, list) else [];
+}
+
+
+def model_mode(model_name: str) -> str {
+    return str(model_entry(model_name).get("mode") or "");
 }
 
 
@@ -90,49 +102,60 @@ def chat_emits_image(model_name: str) -> bool {
 }
 
 
-def resolve_route(resp_type: type | None, model_name: str) -> str {
+def resolve_route(
+    resp_type: type | None, model_name: str, input_kinds: list = []
+) -> str {
     kind = media_kind(resp_type);
+    mode = model_mode(model_name);
+    unknown = not is_known_model(model_name);
+
     if kind == KIND_NONE {
+        if mode == MODE_TRANSCRIPTION and KIND_AUDIO in input_kinds {
+            return ROUTE_TRANSCRIPTION_ENDPOINT;
+        }
         return ROUTE_CHAT;
     }
     if kind == KIND_VIDEO {
-        return ROUTE_VIDEO_ENDPOINT;
+        if mode == MODE_VIDEO or unknown {
+            return ROUTE_VIDEO_ENDPOINT;
+        }
+        return ROUTE_UNSUPPORTED;
     }
     if kind == KIND_IMAGE {
-        if chat_emits_image(model_name) or not is_known_model(model_name) {
+        if chat_emits_image(model_name) or unknown {
             return ROUTE_CHAT;
         }
-        return ROUTE_IMAGE_ENDPOINT;
+        if mode == MODE_IMAGE {
+            return ROUTE_IMAGE_ENDPOINT;
+        }
+        return ROUTE_UNSUPPORTED;
     }
-    if chat_emits_audio(model_name) or not is_known_model(model_name) {
+    if chat_emits_audio(model_name) or unknown {
         return ROUTE_CHAT;
     }
-    return ROUTE_SPEECH_ENDPOINT;
+    if mode == MODE_SPEECH {
+        return ROUTE_SPEECH_ENDPOINT;
+    }
+    return ROUTE_UNSUPPORTED;
 }
 
 
 def route_error(route: str, resp_type: type | None, model_name: str) -> str {
-    if route == ROUTE_CHAT {
+    if route != ROUTE_UNSUPPORTED {
         return "";
     }
     kind = media_kind(resp_type);
-    mode = str(model_entry(model_name).get("mode") or "chat");
+    mode = model_mode(model_name) or "chat";
     hint = {
-        ROUTE_IMAGE_ENDPOINT: "an image-capable chat model such as "
-        "'gemini/gemini-2.5-flash-image'",
-        ROUTE_SPEECH_ENDPOINT: "an audio-capable chat model such as " "'gpt-audio'",
-        ROUTE_VIDEO_ENDPOINT: "no chat model emits video",
-
+        KIND_IMAGE: "an image model such as `dall-e-3`, or an image-capable "
+        "chat model such as `gemini/gemini-2.5-flash-image`",
+        KIND_AUDIO: "a text-to-speech model such as `tts-1`, or an "
+        "audio-capable chat model such as `gpt-audio`",
+        KIND_VIDEO: "a video model such as `sora-2`"
     }.get(
-        route, ""
+        kind, "a model that can produce it"
     );
-
-    endpoint = route.removesuffix("_endpoint");
-    return (
-        f"Returning {kind} from `by llm()` needs the dedicated "
-        f"`{endpoint}` endpoint, which byLLM does not route to yet "
-        f"(model `{model_name}` has mode `{mode}`). Use {hint}."
-    );
+    return (f"Model `{model_name}` (mode `{mode}`) cannot produce {kind}. Use {hint}.");
 }
 
 

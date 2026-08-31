@@ -50,10 +50,24 @@ import from jaclang.byllm.media_routing {
     KIND_AUDIO,
     KIND_IMAGE,
     ROUTE_CHAT,
+    ROUTE_IMAGE_ENDPOINT,
+    ROUTE_SPEECH_ENDPOINT,
+    ROUTE_UNSUPPORTED,
+    ROUTE_VIDEO_ENDPOINT,
     audio_output_params,
     media_kind,
     resolve_route,
     route_error
+}
+import from jaclang.byllm.media_gen {
+    agenerate_image,
+    agenerate_video,
+    asynthesize_speech,
+    atranscribe,
+    generate_image,
+    generate_video,
+    synthesize_speech,
+    transcribe
 }
 import from jaclang.byllm.tool_protocol { inject_tool_hint, recover_tool_calls }
 

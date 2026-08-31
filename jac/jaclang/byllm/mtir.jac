@@ -40,7 +40,10 @@ obj MTRuntime {
         _final_output: object = None,
         _has_final_output: bool = False,
         _stream_reset_count: int = 0,
-        _tool_arg_deltas: list[dict] = [];
+        _tool_arg_deltas: list[dict] = [],
+        media_prompt: str = "",
+        media_text: str = "",
+        media_args: list = [];
 
     static def factory(mtir: MTIR) -> MTRuntime;
     def add_message(message: MessageType) -> None;
