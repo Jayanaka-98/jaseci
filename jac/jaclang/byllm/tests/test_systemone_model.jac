@@ -144,7 +144,9 @@ test "postinit resolves caps, endpoint and model from the provider" {
     m = _Stub(model_name="systemone:laya");
     assert m.provider == "laya";
     assert m._so1_model == "laya" , f"model must default from caps, got {m._so1_model!r}";
-    assert m._caps.max_choice_options == 24 , (
+    caps = m._caps;
+    assert caps is not None;
+    assert caps.max_choice_options == 24 , (
         "laya's option cap must come from its provider used"
     );
     assert m._endpoint() == "http://localhost:8000/v1/systemone" , m._endpoint();
@@ -181,8 +183,9 @@ test "an enum call site is served by the endpoint and rebuilt into the member" {
     assert used["prompt_tokens"] == 300 and used["completion_tokens"] == 40;
     assert used["systemone"]["confidence"] == 0.93;
     assert used["systemone"]["provider"] == "typesafe";
-    assert abs(mt._so1_confidence - 0.93) < 1e-9;
-    assert set(mt._so1_probabilities["value"].keys()) == {"LOW", "HIGH"};
+    assert abs(getattr(mt, "_so1_confidence", 0.0) - 0.93) < 1e-9;
+    assert set(getattr(mt, "_so1_probabilities", {})["value"].keys())
+        == {"LOW", "HIGH"};
 }
 
 
