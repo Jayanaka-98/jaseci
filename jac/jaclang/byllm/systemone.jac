@@ -12,6 +12,9 @@ glob MODE_ENUM = "enum",
 
 glob ANSWER_KEY = "value";
 
+glob SYSTEMONE_PREFIX = "systemone:",
+     DEFAULT_PROVIDER = "typesafe";
+
 
 obj ProviderCaps {
     has base_url: str = "",
@@ -19,7 +22,9 @@ obj ProviderCaps {
         model: str = "",
         max_choice_options: int = 255,
         max_state_chars: int = 120000,
-        supports_batch: bool = True;
+        supports_batch: bool = True,
+        route: str = "/v1/systemone",
+        key_env_aliases: list[str] = [];
 }
 
 
@@ -57,3 +62,14 @@ def lower(
 ) -> (SystemOneSpec | None);
 
 def assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, float];
+
+
+def providers -> dict[str, ProviderCaps];
+
+def caps_for(provider: str) -> ProviderCaps;
+
+def resolve_model_name(name: str) -> tuple[str, str];
+
+def resolve_api_key(caps: ProviderCaps, explicit: str = "") -> str;
+
+def distribution(spec: SystemOneSpec, answers: dict[str, any]) -> dict[str, any];

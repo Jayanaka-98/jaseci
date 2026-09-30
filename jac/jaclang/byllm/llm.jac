@@ -14,7 +14,19 @@ import from jaclang.byllm.mtir { MTRuntime }
 import from jaclang.byllm._optdeps.litellm { litellm, _disable_debugging }
 import from jaclang.byllm._optdeps.openai { openai, OpenAI, AsyncOpenAI }
 import from jaclang.project.capabilities { require_optional }
+import from jaclang.byllm.systemone {
+    SYSTEMONE_PREFIX,
+    ProviderCaps,
+    SystemOneSpec,
+    assemble,
+    caps_for,
+    distribution,
+    lower,
+    resolve_api_key,
+    resolve_model_name
+}
 import from jaclang.byllm.exceptions {
+    ByLLMError,
     AuthenticationError,
     FinishToolError,
     OutputConversionError,
@@ -249,6 +261,7 @@ obj Model(BaseLLM) {
         http_client: bool = False,
         _mock_delegate: MockLLM | None = None,
         _local_delegate: BaseLLM | None = None,
+        _so1_delegate: BaseLLM | None = None,
         _async_proxy_client: AsyncOpenAI | None = None;
 
     def postinit -> None;
@@ -270,4 +283,39 @@ obj Model(BaseLLM) {
     async def model_call_http_async(
         url: str, token: str, payload: dict[str, any], ca_bundle: (str | bool | None)
     ) -> dict[str, any];
+}
+
+
+obj SystemOneModel(BaseLLM) {
+    has model_name: str = "systemone:typesafe/jev-latest",
+        provider: str = "",
+        fallback: BaseLLM | None = None,
+        min_confidence: float = 0.0,
+        route: str = "",
+        _caps: ProviderCaps | None = None,
+        _so1_model: str = "",
+        _max_retries: int = 2;
+
+    def postinit -> None;
+    override def invoke(mt_run: MTRuntime) -> any;
+    override async def ainvoke(mt_run: MTRuntime) -> any;
+    def _request(payload: dict[str, any]) -> tuple[int, dict[str, any]];
+    async def _arequest(payload: dict[str, any]) -> tuple[int, dict[str, any]];
+    def _post(payload: dict[str, any]) -> dict[str, any];
+    async def _apost(payload: dict[str, any]) -> dict[str, any];
+    def _endpoint -> str;
+    def _headers -> dict[str, str];
+    def _map_status(status: int, body: dict[str, any]) -> None;
+    def _finish(
+        mt_run: MTRuntime, spec: SystemOneSpec, body: dict[str, any]
+    ) -> tuple[object, bool];
+
+    def _record(
+        mt_run: MTRuntime,
+        body: dict[str, any],
+        confidence: float,
+        probs: dict[str, any]
+    ) -> None;
+
+    def _no_fallback(reason: str) -> ConfigurationError;
 }

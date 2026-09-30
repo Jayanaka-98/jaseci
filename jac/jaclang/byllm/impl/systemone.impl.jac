@@ -222,3 +222,90 @@ impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, flo
 
     raise OutputConversionError(f"unknown System One lowering mode {spec.mode!r}");
 }
+
+
+impl providers -> dict[str, ProviderCaps] {
+    return {
+        "typesafe": ProviderCaps(
+            base_url="https://api.typesafe.ai",
+            key_env="TYPESAFE_API_KEY",
+            key_env_aliases=["JEV_API_KEY"],
+            model="jev-latest"
+        ),
+        "litellm": ProviderCaps(
+            base_url="http://localhost:4000",
+            key_env="LITELLM_API_KEY",
+            key_env_aliases=["LITELLM_KEY"],
+            model="jev-latest",
+            route="/typesafe/v1/systemone"
+        ),
+        "openjev": ProviderCaps(
+            base_url="http://localhost:8000", model="diffusiongemma-26b-a4b"
+        ),
+        "laya": ProviderCaps(
+            base_url="http://localhost:8000",
+            model="laya",
+            max_choice_options=24,
+            max_state_chars=2000
+        )
+    };
+}
+
+
+impl caps_for(provider: str) -> ProviderCaps {
+    table = providers();
+    if provider not in table {
+        raise ConfigurationError(
+            f"unknown System One provider {provider!r}; known: {sorted(table.keys())}"
+        );
+    }
+    return table[provider];
+}
+
+
+impl resolve_model_name(name: str) -> tuple[str, str] {
+    rest = name[len(SYSTEMONE_PREFIX):] if name.startswith(SYSTEMONE_PREFIX) else name;
+    rest = rest.strip();
+    if "/" in rest {
+        (provider, model) = rest.split("/", 1);
+        return (provider.strip() or DEFAULT_PROVIDER, model.strip());
+    }
+    if rest in providers() {
+        return (rest, "");
+    }
+    return (DEFAULT_PROVIDER, rest);
+}
+
+
+impl resolve_api_key(caps: ProviderCaps, explicit: str = "") -> str {
+    import os;
+
+    if explicit {
+        return explicit;
+    }
+    for env in [caps.key_env, *caps.key_env_aliases] {
+        if env and os.environ.get(env) {
+            return os.environ[env];
+        }
+    }
+    return "";
+}
+
+
+impl distribution(spec: SystemOneSpec, answers: dict[str, any]) -> dict[str, any] {
+    out: dict[str, any] = {};
+    for (qid, q) in spec.questions.items() {
+        a = answers.get(qid);
+        if not isinstance(a, dict) {
+            continue;
+        }
+        if q.kind == NOUL {
+            p = float(a.get("noul", 0.0));
+            out[qid] = {"true": p, "false": 1.0 - p};
+        } else {
+            probs = a.get("probabilities");
+            out[qid] = dict(probs) if isinstance(probs, dict) else {};
+        }
+    }
+    return out;
+}
