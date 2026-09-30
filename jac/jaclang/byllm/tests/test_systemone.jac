@@ -1,24 +1,21 @@
 """Lowering a `by llm()` call site onto the System One protocol, and back.
 
-The lowering is pure: no transport is exercised here. A probe model stands in
-for the backend, captures the MTRuntime the compiler handed it, and runs
-`lower` against it, so every assertion is about a real compiled call site rather
-than a hand-built request.
+The lowering is pure: no transport is exercised here. A probe model stands in for
+the backend, captures the MTRuntime the compiler handed it, and runs `lower`
+against it, so every assertion is about a real compiled call site rather than a
+hand-built request.
+
+The declarations have to live in this module. The compiler attaches the
+`FunctionInfo` the lowering reads to call sites it compiled here; reached through
+an imported fixture module, `mtir.ir_info` comes back as None.
 """
 
 import from jaclang.byllm.llm { BaseLLM }
 import from jaclang.byllm.mtir { MTRuntime }
 import from jaclang.byllm.exceptions { OutputConversionError }
-import from jaclang.byllm.systemone {
-    ProviderCaps,
-    assemble,
-    lower
-}
-import from fixtures.systemone_site { Priority, Team }
-import fixtures.systemone_site as site;
+import from jaclang.byllm.systemone { ProviderCaps, assemble, lower }
 
 
-"""Captures the MTRuntime of each call and lowers it, then returns `reply`."""
 obj _Probe(BaseLLM) {
     has model_name: str = "probe",
         specs: list[any] = [],
@@ -32,16 +29,49 @@ obj _Probe(BaseLLM) {
 }
 
 
-def _probe(reply: any, caps: (ProviderCaps | None) = None) -> _Probe {
-    p = _Probe(reply=reply, caps=caps);
-    site.llm = p;
-    return p;
+glob _probe = _Probe();
+
+
+"""How urgently a support ticket needs a human."""
+enum Priority {
+    LOW,
+    HIGH
+}
+
+sem Priority.LOW = "can wait until the next business day";
+sem Priority.HIGH = "needs attention right now";
+
+
+enum Team { BILLING, SECURITY, PLATFORM }
+
+
+def _rank(ticket: str) -> Priority by _probe();
+
+sem _rank = "Rank how urgent the ticket is";
+
+
+def _route(subject: str, body: str) -> Team by _probe();
+
+
+def _is_spam(subject: str) -> bool by _probe();
+
+sem _is_spam = "True if this message is unsolicited bulk mail";
+
+
+def _summarize(text: str) -> str by _probe();
+
+
+def _reset(reply: any, caps: (ProviderCaps | None) = None) -> _Probe {
+    _probe.specs = [];
+    _probe.reply = reply;
+    _probe.caps = caps;
+    return _probe;
 }
 
 
 test "an enum return lowers to one choice carrying the enum's sem strings" {
-    p = _probe(Priority.LOW);
-    site.rank("the checkout page is down");
+    p = _reset(Priority.LOW);
+    _rank("the checkout page is down");
 
     spec = p.specs[0];
     assert spec is not None , "an enum return must be eligible";
@@ -50,16 +80,17 @@ test "an enum return lowers to one choice carrying the enum's sem strings" {
 
     q = list(spec.questions.values())[0];
     assert q.kind == "choice" , f"an enum is a choice, got {q.kind!r}";
-    assert q.criteria == {
-        "LOW": "can wait until the next business day",
-        "HIGH": "needs attention right now"
-    } , f"`sem` on each member must become the criteria value, got {q.criteria}";
+    assert q.criteria
+        == {
+            "LOW": "can wait until the next business day",
+            "HIGH": "needs attention right now"
+        } , f"`sem` on each member must become the criteria value, got {q.criteria}";
 }
 
 
 test "the function's sem becomes the question's instructions" {
-    p = _probe(Priority.HIGH);
-    site.rank("minor typo on the pricing page");
+    p = _reset(Priority.HIGH);
+    _rank("minor typo on the pricing page");
 
     q = list(p.specs[0].questions.values())[0];
     assert q.instructions == "Rank how urgent the ticket is" , (
@@ -69,8 +100,8 @@ test "the function's sem becomes the question's instructions" {
 
 
 test "a member with no sem is offered as an undescribed label" {
-    p = _probe(Team.BILLING);
-    site.route("invoice", "we were charged twice");
+    p = _reset(Team.BILLING);
+    _route("invoice", "we were charged twice");
 
     q = list(p.specs[0].questions.values())[0];
     assert q.criteria == {"BILLING": None, "SECURITY": None, "PLATFORM": None} , (
@@ -80,33 +111,36 @@ test "a member with no sem is offered as an undescribed label" {
 
 
 test "call arguments become the state, keyed by parameter name" {
-    p = _probe(Team.SECURITY);
-    site.route("vulnerability", "one tenant can read another tenant's files");
+    p = _reset(Team.SECURITY);
+    _route("vulnerability", "one tenant can read another tenant's files");
 
     state = p.specs[0].state;
-    assert state == {
-        "subject": "vulnerability",
-        "body": "one tenant can read another tenant's files"
-    } , f"state must be the named arguments, got {state}";
+    assert state
+        == {
+            "subject": "vulnerability",
+            "body": "one tenant can read another tenant's files"
+        } , f"state must be the named arguments, got {state}";
 }
 
 
 test "a bool return lowers to a noul" {
-    p = _probe(True);
-    site.is_spam("YOU HAVE WON");
+    p = _reset(True);
+    _is_spam("YOU HAVE WON");
 
     spec = p.specs[0];
     assert spec.mode == "bool" , f"expected bool mode, got {spec.mode!r}";
     q = list(spec.questions.values())[0];
     assert q.kind == "noul" , f"a bool is a noul, got {q.kind!r}";
-    assert q.instructions == "True if this message is unsolicited bulk mail";
+    assert q.instructions == "True if this message is unsolicited bulk mail" , (
+        f"the function's sem must be the instructions, got {q.instructions!r}"
+    );
     assert q.criteria is None , f"a bare bool needs no criteria, got {q.criteria}";
 }
 
 
 test "an open-ended return is refused so it can go to the fallback" {
-    p = _probe("a summary");
-    site.summarize("some long document");
+    p = _reset("a summary");
+    _summarize("some long document");
 
     assert p.specs[0] is None , (
         "`-> str` has no closed option set and must not be lowered"
@@ -115,8 +149,8 @@ test "an open-ended return is refused so it can go to the fallback" {
 
 
 test "a frontier wider than the provider allows is refused, not truncated" {
-    p = _probe(Team.PLATFORM, caps=ProviderCaps(max_choice_options=2));
-    site.route("anything", "at all");
+    p = _reset(Team.PLATFORM, caps=ProviderCaps(max_choice_options=2));
+    _route("anything", "at all");
 
     assert p.specs[0] is None , (
         "three labels must be refused when the provider caps choices at two"
@@ -125,8 +159,8 @@ test "a frontier wider than the provider allows is refused, not truncated" {
 
 
 test "a chosen label is rebuilt into the declared enum member" {
-    p = _probe(Priority.LOW);
-    site.rank("the checkout page is down");
+    p = _reset(Priority.LOW);
+    _rank("the checkout page is down");
     spec = p.specs[0];
 
     (value, conf) = assemble(
@@ -138,8 +172,8 @@ test "a chosen label is rebuilt into the declared enum member" {
 
 
 test "a noul probability becomes a bool and a two-option confidence" {
-    p = _probe(True);
-    site.is_spam("YOU HAVE WON");
+    p = _reset(True);
+    _is_spam("YOU HAVE WON");
     spec = p.specs[0];
 
     (value, conf) = assemble(spec, {"value": {"type": "noul", "noul": 0.9}});
@@ -153,8 +187,8 @@ test "a noul probability becomes a bool and a two-option confidence" {
 
 
 test "a label outside the declared enum is an error, not a silent None" {
-    p = _probe(Priority.LOW);
-    site.rank("the checkout page is down");
+    p = _reset(Priority.LOW);
+    _rank("the checkout page is down");
     spec = p.specs[0];
 
     caught = False;
@@ -169,8 +203,8 @@ test "a label outside the declared enum is an error, not a silent None" {
 
 
 test "the wire payload is the protocol's shape" {
-    p = _probe(Priority.LOW);
-    site.rank("the checkout page is down");
+    p = _reset(Priority.LOW);
+    _rank("the checkout page is down");
 
     payload = p.specs[0].to_payload("jev-latest");
     assert payload["model"] == "jev-latest";

@@ -1,15 +1,3 @@
-"""Lowering a `by llm()` call site onto the System One question protocol.
-
-System One models answer typed questions against a shared state and return
-calibrated probability distributions instead of generating text. TypeSafe's Jev
-was the first; the open implementations (OpenJev, Laya, Kev) speak the same
-`/v1/systemone` wire format, so this module targets the protocol rather than any
-one vendor.
-
-Nothing here knows about HTTP. The same lowering serves a hosted endpoint and an
-in-process model, which is what keeps a future `LocalSystemOne` cheap.
-"""
-
 import from enum { Enum }
 import from jaclang.runtime.semantic { EnumInfo, FunctionInfo, VarInfo }
 import from jaclang.byllm.mtir { MTRuntime }
@@ -19,20 +7,12 @@ glob CHOICE = "choice",
      NOUL = "noul",
      SCORE = "score";
 
-# Modes are how `assemble` knows what to rebuild. One per lowering rule.
 glob MODE_ENUM = "enum",
      MODE_BOOL = "bool";
 
 glob ANSWER_KEY = "value";
 
 
-"""What one provider's model can actually be asked.
-
-These differ per implementation, not per protocol: Jev holds ~0.87 accuracy at
-77 labels where Laya reports 0.425, so the option cap belongs here rather than
-in a fixed rule. A call that exceeds the caps is refused by `lower`, which sends
-it to the configured fallback instead of off a silent accuracy cliff.
-"""
 obj ProviderCaps {
     has base_url: str = "",
         key_env: str = "",

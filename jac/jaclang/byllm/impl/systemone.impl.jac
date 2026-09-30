@@ -57,12 +57,6 @@ impl instructions_of(mt_run: MTRuntime) -> str {
 }
 
 
-"""Render one call argument into something the protocol will accept.
-
-State must be text: strings, JSON objects or arrays of text. Anything that is
-not a JSON primitive is stringified rather than refused, because a node or a
-dataclass carries real signal in its repr.
-"""
 def _state_value(value: object) -> object {
     if value is None or isinstance(value, (str, int, float, bool)) {
         return value;
@@ -94,8 +88,6 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
 
     owner = mt_run.mtir;
     if owner is None {
-        # No MTIR: `visit ... by llm()` builds its MTRuntime from messages
-        # directly, so the already-rendered prompt is the state.
         text = _messages_text(mt_run);
         return {"context": text} if text else None;
     }
@@ -107,7 +99,7 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
     for (idx, key) in enumerate(list(owner.args.keys())) {
         value = owner.args[key];
         if isinstance(value, Media) {
-            return None;  # the protocol is text only
+            return None;
         }
         if isinstance(key, str) {
             name = key;
@@ -122,17 +114,13 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
 }
 
 
-"""Build the `choice` question for an enum return type.
-
-`sem Category.WORK = "..."` is the criteria value for the `WORK` label, which is
-the whole reason this lowering is mechanical: the compiler already recorded it.
-"""
 def _lower_enum(
     resp_type: type, enum_info: EnumInfo, instructions: str, caps: ProviderCaps
 ) -> (Question | None) {
+    members = getattr(resp_type, "__members__", {});
     criteria: dict[str, any] = {};
     for member in (enum_info.members or []) {
-        if member.name not in resp_type.__members__ {
+        if member.name not in members {
             continue;
         }
         criteria[member.name] = member.semstr or None;
@@ -156,7 +144,6 @@ impl lower(
 
     caps = caps or default_caps();
 
-    # The protocol answers questions. It does not call tools, stream, or draw.
     if mt_run.tools or mt_run.stream or image_resp_kind(mt_run.resp_type) {
         return None;
     }
@@ -194,10 +181,7 @@ impl lower(
     }
 
     return SystemOneSpec(
-        state=state,
-        questions={ANSWER_KEY: question},
-        mode=mode,
-        resp_type=resp_type
+        state=state, questions={ANSWER_KEY: question}, mode=mode, resp_type=resp_type
     );
 }
 
@@ -212,13 +196,13 @@ impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, flo
 
     if spec.mode == MODE_BOOL {
         p = float(answer.get("noul", 0.0));
-        # Confidence for two options: (n * p_max - 1) / (n - 1) with n = 2.
+
         return (p > 0.5, abs(2.0 * p - 1.0));
     }
 
     if spec.mode == MODE_ENUM {
         name = answer.get("choice");
-        members = spec.resp_type.__members__ if spec.resp_type else {};
+        members = getattr(spec.resp_type, "__members__", {});
         if name not in members {
             raise OutputConversionError(
                 f"System One returned label {name!r}, which is not a member of "
