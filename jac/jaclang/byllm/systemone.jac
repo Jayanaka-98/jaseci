@@ -44,7 +44,7 @@ obj SystemOneSpec {
 
 def default_caps -> ProviderCaps;
 
-def enum_info_of(resp_type: (type | None), info: object) -> (EnumInfo | None);
+def enum_info_of(resp_type: object, info: object) -> (EnumInfo | None);
 
 def return_info_of(mt_run: MTRuntime) -> object;
 

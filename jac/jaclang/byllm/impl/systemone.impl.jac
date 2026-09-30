@@ -21,7 +21,7 @@ impl default_caps -> ProviderCaps {
 }
 
 
-impl enum_info_of(resp_type: (type | None), info: object) -> (EnumInfo | None) {
+impl enum_info_of(resp_type: object, info: object) -> (EnumInfo | None) {
     if not (isinstance(resp_type, type) and issubclass(resp_type, Enum)) {
         return None;
     }
@@ -45,13 +45,18 @@ impl return_info_of(mt_run: MTRuntime) -> object {
 impl instructions_of(mt_run: MTRuntime) -> str {
     owner = mt_run.mtir;
     owner_info = owner.ir_info if owner else None;
-    if isinstance(owner_info, FunctionInfo) {
-        if owner_info.semstr {
-            return owner_info.semstr;
-        }
-        if owner_info.name {
-            return owner_info.name.replace("_", " ");
-        }
+    if isinstance(owner_info, FunctionInfo) and owner_info.semstr {
+        return owner_info.semstr;
+    }
+    caller = owner.caller if owner else None;
+    doc = caller?.__doc__;
+    if isinstance(doc, str) and doc.strip() {
+        return doc.strip();
+    }
+    name = getattr(caller, "__name__", "")
+        or (owner_info.name if isinstance(owner_info, FunctionInfo) else "");
+    if name {
+        return str(name).strip("_").replace("_", " ");
     }
     return "Choose the value the program should receive.";
 }
@@ -115,15 +120,18 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
 
 
 def _lower_enum(
-    resp_type: type, enum_info: EnumInfo, instructions: str, caps: ProviderCaps
+    resp_type: object,
+    enum_info: (EnumInfo | None),
+    instructions: str,
+    caps: ProviderCaps
 ) -> (Question | None) {
-    members = getattr(resp_type, "__members__", {});
+    described: dict[str, any] = {};
+    for member in ((enum_info.members if enum_info else None) or []) {
+        described[member.name] = member.semstr or None;
+    }
     criteria: dict[str, any] = {};
-    for member in (enum_info.members or []) {
-        if member.name not in members {
-            continue;
-        }
-        criteria[member.name] = member.semstr or None;
+    for name in getattr(resp_type, "__members__", {}) {
+        criteria[name] = described.get(name);
     }
     if len(criteria) < 2 or len(criteria) > caps.max_choice_options {
         return None;
@@ -160,12 +168,14 @@ impl lower(
     if resp_type is bool {
         question = _lower_bool(instructions);
         mode = MODE_BOOL;
-    } else {
-        enum_info = enum_info_of(resp_type, return_info_of(mt_run));
-        if enum_info is not None {
-            question = _lower_enum(resp_type, enum_info, instructions, caps);
-            mode = MODE_ENUM;
-        }
+    } elif isinstance(resp_type, type) and issubclass(resp_type, Enum) {
+        question = _lower_enum(
+            resp_type,
+            enum_info_of(resp_type, return_info_of(mt_run)),
+            instructions,
+            caps
+        );
+        mode = MODE_ENUM;
     }
 
     if question is None {
@@ -181,7 +191,10 @@ impl lower(
     }
 
     return SystemOneSpec(
-        state=state, questions={ANSWER_KEY: question}, mode=mode, resp_type=resp_type
+        state=state,
+        questions={ANSWER_KEY: question},
+        mode=mode,
+        resp_type=mt_run.resp_type
     );
 }
 
