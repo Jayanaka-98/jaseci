@@ -88,6 +88,42 @@ def _triage_info -> FunctionInfo {
 }
 
 
+enum Sev { LOW = 1, HIGH = 2, SEVERE = 2 }
+
+
+def _list_of(base: FunctionInfo, name: str) -> FunctionInfo {
+    return FunctionInfo(
+        name=name,
+        semstr=f"Which apply: {base.name}",
+        params=base.params,
+        return_type=TypeForm(head="list", args=[base.return_type])
+    );
+}
+
+
+def _sev_list_info -> FunctionInfo {
+    return FunctionInfo(
+        name="severities",
+        semstr="Which severities apply",
+        params=[ParamInfo(name="ticket", semstr=None, type_info="str")],
+        return_type=TypeForm(
+            head="list",
+            args=[
+                EnumInfo(
+                    name="Sev",
+                    semstr=None,
+                    members=[
+                        FieldInfo(name="LOW", semstr=None, type_info=None),
+                        FieldInfo(name="HIGH", semstr=None, type_info=None),
+                        FieldInfo(name="SEVERE", semstr=None, type_info=None)
+                    ]
+                )
+            ]
+        )
+    );
+}
+
+
 def _stub(ticket: str) -> object {
     return None;
 }
@@ -566,4 +602,85 @@ test "Decision[T] is one class per T, and a bare Decision is refused" {
     assert lower(_mt(Decision, {"ticket": "x"}, _priority_info())) is None , (
         "Decision without a type parameter cannot be lowered"
     );
+}
+
+
+def _nouls(ps: dict[str, float]) -> dict[str, any] {
+    return {k: {"type": "noul", "noul": v} for (k, v) in ps.items()};
+}
+
+
+test "select=all with zero positives is an empty list at the boundary confidence" {
+    spec = _lowered(
+        _mt(list[Priority], {"ticket": "x"}, _priority_list_info(), select="all")
+    );
+    (value, conf) = assemble(spec, _nouls({"LOW": 0.1, "HIGH": 0.05}));
+    assert value == [] , f"nothing cleared the gate, got {value!r}";
+    assert abs(conf - 0.8) < 1e-9 , f"min(|2p-1|) over members is 0.8, got {conf}";
+}
+
+
+test "an exact select=N fills to N by rank and reports the weakest pick's confidence" {
+    spec = _lowered(
+        _mt(list[Priority], {"ticket": "x"}, _priority_list_info(), select=2)
+    );
+
+    (value, conf) = assemble(spec, _nouls({"LOW": 0.9, "HIGH": 0.3}));
+    assert value == [Priority.LOW, Priority.HIGH] , (
+        f"exact N must not come back short, got {value!r}"
+    );
+    assert conf == 0.0 , f"a below-gate Nth pick is zero confidence, got {conf}";
+
+    (value2, conf2) = assemble(spec, _nouls({"LOW": 0.9, "HIGH": 0.7}));
+    assert value2 == [Priority.LOW, Priority.HIGH];
+    assert abs(conf2 - 0.4) < 1e-9 , f"2*0.7-1 for the weakest pick, got {conf2}";
+}
+
+
+test "ties resolve in declaration order" {
+    spec = _lowered(
+        _mt(list[Priority], {"ticket": "x"}, _priority_list_info(), select="all")
+    );
+    (value, _c) = assemble(spec, _nouls({"LOW": 0.8, "HIGH": 0.8}));
+    assert value == [Priority.LOW, Priority.HIGH] , f"got {value!r}";
+}
+
+
+test "a select larger than the candidate set returns every candidate, ranked" {
+    spec = _lowered(
+        _mt(list[Priority], {"ticket": "x"}, _priority_list_info(), select=5)
+    );
+    (value, conf) = assemble(spec, _nouls({"LOW": 0.6, "HIGH": 0.9}));
+    assert value == [Priority.HIGH, Priority.LOW] , f"got {value!r}";
+    assert abs(conf - 0.2) < 1e-9 , f"weakest of what could be given, got {conf}";
+}
+
+
+test "a (lo, hi) select fills to lo and cuts to hi" {
+    info = _list_of(_team_info(), "teams");
+    spec = _lowered(
+        _mt(list[Team], {"subject": "a", "body": "b"}, info, select=(1, 2))
+    );
+
+    (value, conf) = assemble(
+        spec, _nouls({"BILLING": 0.7, "SECURITY": 0.9, "PLATFORM": 0.8})
+    );
+    assert value == [Team.SECURITY, Team.PLATFORM] , f"cut to hi=2 by rank, got {value!r}";
+    assert abs(conf - 0.6) < 1e-9 , conf;
+
+    (value2, conf2) = assemble(
+        spec, _nouls({"BILLING": 0.2, "SECURITY": 0.1, "PLATFORM": 0.3})
+    );
+    assert value2 == [Team.PLATFORM] , f"filled to lo=1 from the ranked rest, got {value2!r}";
+    assert conf2 == 0.0 , "a filled pick below the gate is zero confidence";
+}
+
+
+test "an enum alias is asked once and returned once" {
+    spec = _lowered(_mt(list[Sev], {"ticket": "x"}, _sev_list_info(), select="all"));
+    assert set(spec.questions.keys()) == {"LOW", "HIGH"} , (
+        f"SEVERE aliases HIGH and must not be a separate question: {spec.questions.keys()}"
+    );
+    (value, _c) = assemble(spec, _nouls({"LOW": 0.9, "HIGH": 0.9}));
+    assert value == [Sev.LOW, Sev.HIGH] , f"no duplicates, got {value!r}";
 }

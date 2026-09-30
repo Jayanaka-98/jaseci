@@ -53,7 +53,8 @@ obj SystemOneSpec {
         mode: str,
         resp_type: (type | None) = None,
         as_list: bool = False,
-        wrap_decision: bool = False;
+        wrap_decision: bool = False,
+        select: any = "all";
 
     def to_payload(model: str) -> dict[str, any];
 }

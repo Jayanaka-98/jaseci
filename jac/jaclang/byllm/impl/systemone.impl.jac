@@ -127,6 +127,15 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
 }
 
 
+def _canonical_names(enum_type: object) -> list[str] {
+    try {
+        return [str(getattr(m, "name", m)) for m in list(enum_type)];
+    } except Exception {
+        return list(getattr(enum_type, "__members__", {}).keys());
+    }
+}
+
+
 def _lower_enum(
     resp_type: object,
     enum_info: (EnumInfo | None),
@@ -138,7 +147,7 @@ def _lower_enum(
         described[member.name] = member.semstr or None;
     }
     criteria: dict[str, any] = {};
-    for name in getattr(resp_type, "__members__", {}) {
+    for name in _canonical_names(resp_type) {
         criteria[name] = described.get(name);
     }
     if len(criteria) < 2 or len(criteria) > caps.max_choice_options {
@@ -186,7 +195,7 @@ def _lower_enum_list(
     for member in ((enum_info.members if enum_info else None) or []) {
         described[member.name] = member.semstr or None;
     }
-    names = list(getattr(inner, "__members__", {}).keys());
+    names = _canonical_names(inner);
     if not names or len(names) > caps.max_choice_options or not caps.supports_batch {
         return {};
     }
@@ -342,6 +351,7 @@ impl lower(
     mode = "";
     as_list = False;
     carried: any = target;
+    route_select: any = "all";
 
     if target is bool {
         questions[ANSWER_KEY] = _lower_bool(instructions);
@@ -358,6 +368,7 @@ impl lower(
             carried = inner;
             enum_info = enum_info_of(inner, _list_inner_info(info));
             select = getattr(mt_run, ROUTE_SELECT_ATTR, "all");
+            route_select = select;
             if isinstance(select, int)
                 and not isinstance(select, bool)
                 and select == 1 {
@@ -401,7 +412,8 @@ impl lower(
         mode=mode,
         resp_type=carried,
         as_list=as_list,
-        wrap_decision=wrap
+        wrap_decision=wrap,
+        select=route_select
     );
 }
 
@@ -409,18 +421,45 @@ impl lower(
 impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, float] {
     if spec.mode == MODE_ENUM_LIST {
         members = getattr(spec.resp_type, "__members__", {});
-        picked: list[tuple[float, int, object]] = [];
-        worst = 1.0;
-        for (i, (name, member)) in enumerate(members.items()) {
+        ranked: list[tuple[float, int, object]] = [];
+        seen: set[int] = set();
+        boundary = 1.0;
+        pos = 0;
+        for name in _canonical_names(spec.resp_type) {
+            member = members.get(name);
+            if member is None or id(member) in seen {
+                continue;
+            }
+            seen.add(id(member));
             a = answers.get(name);
             p = float(a.get("noul", 0.0)) if isinstance(a, dict) else 0.0;
-            worst = min(worst, abs(2.0 * p - 1.0));
-            if p > 0.5 {
-                picked.append((p, -i, member));
-            }
+            boundary = min(boundary, abs(2.0 * p - 1.0));
+            ranked.append((p, -pos, member));
+            pos += 1;
         }
-        picked.sort(reverse=True);
-        return ([m for (_p, _i, m) in picked], worst);
+        ranked.sort(reverse=True);
+        above = [
+            r
+            for r in ranked
+            if r[0] > 0.5
+        ];
+        sel = spec.select;
+        take = above;
+        exact = False;
+        if isinstance(sel, int) and not isinstance(sel, bool) and sel >= 1 {
+            take = ranked[:sel];
+            exact = True;
+        } elif isinstance(sel, tuple) and len(sel) == 2 {
+            lo = int(sel[0]);
+            hi = int(sel[1]);
+            take = above[:hi];
+            if len(take) < lo {
+                take = ranked[:min(lo, len(ranked))];
+            }
+            exact = True;
+        }
+        conf = max(0.0, 2.0 * take[-1][0] - 1.0) if exact and take else boundary;
+        return ([m for (_p, _i, m) in take], conf);
     }
 
     if spec.mode == MODE_RECORD {

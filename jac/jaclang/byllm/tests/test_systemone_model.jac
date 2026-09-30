@@ -17,8 +17,14 @@ import from jaclang.byllm.exceptions {
     ConfigurationError,
     RateLimitError
 }
-import from jaclang.byllm.systemone { Decision, resolve_model_name }
-import from jaclang.runtime.semantic { EnumInfo, FieldInfo, FunctionInfo, ParamInfo }
+import from jaclang.byllm.systemone { Decision, ROUTE_SELECT_ATTR, resolve_model_name }
+import from jaclang.runtime.semantic {
+    EnumInfo,
+    FieldInfo,
+    FunctionInfo,
+    ParamInfo,
+    TypeForm
+}
 
 
 enum Priority { LOW, HIGH }
@@ -345,4 +351,38 @@ test "a Decision[T] call site gets the envelope with the endpoint's confidence" 
     assert out.value is Priority.HIGH;
     assert out.confidence == 0.93;
     assert set(out.probabilities["value"].keys()) == {"LOW", "HIGH"};
+}
+
+
+def _noul_body(ps: dict[str, float]) -> dict[str, any] {
+    return {
+        "model": "jev-1.13.0",
+        "answers": {k: {"type": "noul", "noul": v} for (k, v) in ps.items()},
+        "usage": {"input_tokens": 300, "output_tokens": 40}
+    };
+}
+
+
+test "an exact select whose Nth pick misses the gate escalates to the fallback" {
+    rec = _Recorder(reply=[Priority.LOW]);
+    m = _Stub(fallback=rec, min_confidence=0.5);
+    base = _priority_info();
+    info = FunctionInfo(
+        name="rank_all",
+        semstr="Which priorities apply",
+        params=base.params,
+        return_type=TypeForm(head="list", args=[base.return_type])
+    );
+    mt = _mt(list[Priority], {"ticket": "hmm"}, info);
+    setattr(mt, ROUTE_SELECT_ATTR, 2);
+
+    m.script = [(200, _noul_body({"LOW": 0.9, "HIGH": 0.3}))];
+    out = m.invoke(mt);
+    assert out == [Priority.LOW] , "the short exact-N answer must escalate, got the endpoint's list";
+    assert len(rec.seen) == 1;
+
+    m.script = [(200, _noul_body({"LOW": 0.9, "HIGH": 0.8}))];
+    out2 = m.invoke(mt);
+    assert out2 == [Priority.LOW, Priority.HIGH] , f"both above the gate stands, got {out2!r}";
+    assert len(rec.seen) == 1 , "no escalation when the Nth pick clears the gate";
 }
