@@ -256,3 +256,29 @@ impl SystemOneModel.ainvoke(mt_run: MTRuntime) -> any {
     }
     return value;
 }
+
+
+impl MockSystemOne._request(payload: dict[str, any]) -> tuple[int, dict[str, any]] {
+    self.seen.append(payload);
+    if not self.answers {
+        raise ByLLMError("MockSystemOne has no scripted answer left for this request");
+    }
+    reply = self.answers.pop(0);
+    if isinstance(reply, tuple) {
+        (status, body) = reply;
+        return (int(status), dict(body));
+    }
+    return (
+        200,
+        {
+            "model": self._so1_model,
+            "answers": reply,
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+        }
+    );
+}
+
+
+impl MockSystemOne.exhausted -> bool {
+    return not self.answers;
+}

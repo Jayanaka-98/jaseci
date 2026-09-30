@@ -320,3 +320,13 @@ obj SystemOneModel(BaseLLM) {
 
     def _no_fallback(reason: str) -> ConfigurationError;
 }
+
+
+obj MockSystemOne(SystemOneModel) {
+    has model_name: str = "systemone:typesafe/mock",
+        answers: list[any] = [],
+        seen: list[dict[str, any]] = [];
+
+    override def _request(payload: dict[str, any]) -> tuple[int, dict[str, any]];
+    def exhausted -> bool;
+}
