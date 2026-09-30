@@ -19,10 +19,18 @@ import from jaclang.byllm.systemone { ProviderCaps, assemble, lower }
 obj _Probe(BaseLLM) {
     has model_name: str = "probe",
         specs: list[any] = [],
+        infos: list[str] = [],
         reply: any = None,
         caps: (ProviderCaps | None) = None;
 
     override def invoke(mt_run: MTRuntime) -> any {
+        owner = mt_run.mtir;
+        info = owner.ir_info if owner else None;
+        self.infos.append(
+            f"ir_info={type(info).__name__}"
+            f" semstr={getattr(info, 'semstr', '<none>')!r}"
+            f" return_type={getattr(info, 'return_type', '<none>')!r}"
+        );
         self.specs.append(lower(mt_run, self.caps));
         return self.reply;
     }
@@ -113,7 +121,10 @@ test "an enum return lowers to one choice carrying the enum's sem strings" {
         == {
             "LOW": "can wait until the next business day",
             "HIGH": "needs attention right now"
-        } , f"`sem` on each member must become the criteria value, got {q.criteria}";
+        } , (
+        f"`sem` on each member must become the criteria value, got {q.criteria}"
+        f" | {p.infos[0]}"
+    );
 }
 
 
@@ -124,6 +135,7 @@ test "the function's sem becomes the question's instructions" {
     q = list(p.specs[0].questions.values())[0];
     assert q.instructions == "Rank how urgent the ticket is" , (
         f"the function's sem must be the instructions, got {q.instructions!r}"
+        f" | {p.infos[0]}"
     );
 }
 
@@ -162,6 +174,7 @@ test "a bool return lowers to a noul" {
     assert q.kind == "noul" , f"a bool is a noul, got {q.kind!r}";
     assert q.instructions == "True if this message is unsolicited bulk mail" , (
         f"the function's sem must be the instructions, got {q.instructions!r}"
+        f" | {p.infos[0]}"
     );
     assert q.criteria is None , f"a bare bool needs no criteria, got {q.criteria}";
 }
