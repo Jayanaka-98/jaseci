@@ -4,12 +4,16 @@ The lowering reads what the compiler recorded: `FunctionInfo.semstr` for the
 question's instructions, and the `FieldInfo.semstr` of each `EnumInfo` member for
 its criteria. Both arrive as `mtir.ir_info`.
 
-`jac test` renames each test module to `_jac_test_pkg_N.<file>`, so
-`JacLLM.fetch_mtir` looks up a scope that was never registered and `ir_info` comes
-back None for a call site declared here. Under `jac run` the same declaration
-yields a full FunctionInfo, enum members and semstrings included. So these tests
-build the IR the compiler hands over and drive `lower` on it directly, rather than
-asserting through a call site the harness cannot describe.
+Under `jac test` a call site declared here gets `ir_info` of None. Measured
+side by side with `jac run` on the same declaration: the harness packages the
+module as `_jac_test_pkg_N.<file>`, so `JacLLM.fetch_mtir` composes
+`_jac_test_pkg_N.<file>.<name>`; `semantic_for_scope` returns None for that
+source, and `JacRuntime.program.mtir_map` is empty, while the compiler
+registered the ability as `<file>.<name>`. Under `jac run`, `fetch_mtir`
+rewrites `__main__` to the file stem, which matches, and the lookup yields a
+full FunctionInfo. So these tests build the IR the compiler hands over and
+drive `lower` on it directly, rather than asserting through a call site the
+harness cannot resolve.
 """
 
 import from jaclang.byllm.llm { BaseLLM }
