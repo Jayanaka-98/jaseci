@@ -43,20 +43,19 @@ impl return_info_of(mt_run: MTRuntime) -> object {
 
 
 impl instructions_of(mt_run: MTRuntime) -> str {
+    import from jaclang.byllm.types { Tool }
+
     owner = mt_run.mtir;
     owner_info = owner.ir_info if owner else None;
+    caller = owner.caller if owner else None;
+    if caller is not None {
+        described = Tool.get_func_description(caller);
+        if described {
+            return str(described);
+        }
+    }
     if isinstance(owner_info, FunctionInfo) and owner_info.semstr {
         return owner_info.semstr;
-    }
-    caller = owner.caller if owner else None;
-    doc = caller?.__doc__;
-    if isinstance(doc, str) and doc.strip() {
-        return doc.strip();
-    }
-    name = getattr(caller, "__name__", "")
-        or (owner_info.name if isinstance(owner_info, FunctionInfo) else "");
-    if name {
-        return str(name).strip("_").replace("_", " ");
     }
     return "Choose the value the program should receive.";
 }
@@ -126,8 +125,15 @@ def _lower_enum(
     caps: ProviderCaps
 ) -> (Question | None) {
     described: dict[str, any] = {};
+    for (label, text) in (resp_type?._jac_semstr_inner or {}).items() {
+        if text {
+            described[str(label)] = text;
+        }
+    }
     for member in ((enum_info.members if enum_info else None) or []) {
-        described[member.name] = member.semstr or None;
+        if member.semstr {
+            described[member.name] = member.semstr;
+        }
     }
     criteria: dict[str, any] = {};
     for name in getattr(resp_type, "__members__", {}) {

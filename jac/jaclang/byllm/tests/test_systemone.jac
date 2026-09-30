@@ -25,11 +25,11 @@ obj _Probe(BaseLLM) {
 
     override def invoke(mt_run: MTRuntime) -> any {
         owner = mt_run.mtir;
-        info = owner.ir_info if owner else None;
+        caller = owner.caller if owner else None;
         self.infos.append(
-            f"ir_info={type(info).__name__}"
-            f" semstr={getattr(info, 'semstr', '<none>')!r}"
-            f" return_type={getattr(info, 'return_type', '<none>')!r}"
+            f"caller._jac_semstr={getattr(caller, '_jac_semstr', '<none>')!r}"
+            f" resp_type._jac_semstr_inner="
+            f"{getattr(mt_run.resp_type, '_jac_semstr_inner', '<none>')!r}"
         );
         self.specs.append(lower(mt_run, self.caps));
         return self.reply;
