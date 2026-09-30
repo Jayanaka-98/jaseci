@@ -29,7 +29,36 @@ obj _Probe(BaseLLM) {
 }
 
 
-glob _probe = _Probe();
+obj _Recorder(BaseLLM) {
+    has model_name: str = "recorder",
+        seen: list[any] = [],
+        reply: any = None;
+
+    override def invoke(mt_run: MTRuntime) -> any {
+        self.seen.append(mt_run.get_msg_list());
+        return self.reply;
+    }
+}
+
+
+obj _Refuser(BaseLLM) {
+    has model_name: str = "refuser",
+        fallback: any = None,
+        refused: bool = False;
+
+    override def invoke(mt_run: MTRuntime) -> any {
+        if lower(mt_run) is None {
+            self.refused = True;
+            return self.fallback.invoke(mt_run);
+        }
+        return None;
+    }
+}
+
+
+glob _probe = _Probe(),
+     _rec = _Recorder(reply="a short summary"),
+     _ref = _Refuser(fallback=_rec);
 
 
 """How urgently a support ticket needs a human."""
@@ -213,5 +242,29 @@ test "the wire payload is the protocol's shape" {
     assert q["type"] == "choice" , f"the wire field is `type`, got {q}";
     assert set(q.keys()) == {"type", "instructions", "criteria"} , (
         f"unexpected wire fields: {sorted(q.keys())}"
+    );
+}
+
+
+def _needs_fallback(document: str) -> str by _ref();
+
+
+test "an ineligible call reaches the fallback with the prompt already built" {
+    out = _needs_fallback("the quarterly report is late again");
+
+    assert _ref.refused , "`-> str` must be refused by the lowering";
+    assert out == "a short summary" , (
+        f"the fallback's value must be returned, got {out!r}"
+    );
+    assert len(_rec.seen) == 1 , (
+        f"the fallback must be invoked once, got {len(_rec.seen)}"
+    );
+
+    blob = str(_rec.seen[0]);
+    assert "quarterly report is late again" in blob , (
+        f"the fallback must receive the argument in its prompt: {blob[:300]}"
+    );
+    assert len(_rec.seen[0]) >= 2 , (
+        f"expected a system and a user message, got {_rec.seen[0]}"
     );
 }
