@@ -371,7 +371,8 @@ impl lower(
             route_select = select;
             if isinstance(select, int)
                 and not isinstance(select, bool)
-                and select == 1 {
+                and select == 1
+                and len(_canonical_names(inner)) > 1 {
                 one = _lower_enum(inner, enum_info, instructions, caps);
                 if one is not None {
                     questions[ANSWER_KEY] = one;

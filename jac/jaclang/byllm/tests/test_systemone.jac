@@ -124,6 +124,28 @@ def _sev_list_info -> FunctionInfo {
 }
 
 
+enum Only { ONE }
+
+
+def _only_list_info -> FunctionInfo {
+    return FunctionInfo(
+        name="only",
+        semstr="Which to visit",
+        params=[ParamInfo(name="t", semstr=None, type_info="str")],
+        return_type=TypeForm(
+            head="list",
+            args=[
+                EnumInfo(
+                    name="Only",
+                    semstr=None,
+                    members=[FieldInfo(name="ONE", semstr=None, type_info=None)]
+                )
+            ]
+        )
+    );
+}
+
+
 def _stub(ticket: str) -> object {
     return None;
 }
@@ -683,4 +705,21 @@ test "an enum alias is asked once and returned once" {
     );
     (value, _c) = assemble(spec, _nouls({"LOW": 0.9, "HIGH": 0.9}));
     assert value == [Sev.LOW, Sev.HIGH] , f"no duplicates, got {value!r}";
+}
+
+
+test "select=1 on a single-candidate frontier asks one noul instead of refusing" {
+    spec = _lowered(_mt(list[Only], {"t": "x"}, _only_list_info(), select=1));
+
+    assert spec.mode == "enum_list" , f"one candidate cannot be a choice, got {spec.mode!r}";
+    assert list(spec.questions.keys()) == ["ONE"];
+    assert spec.questions["ONE"].kind == "noul";
+
+    (value, conf) = assemble(spec, _nouls({"ONE": 0.9}));
+    assert value == [Only.ONE] and abs(conf - 0.8) < 1e-9 , (value, conf);
+
+    (value2, conf2) = assemble(spec, _nouls({"ONE": 0.2}));
+    assert value2 == [Only.ONE] and conf2 == 0.0 , (
+        "exact 1 still returns the only candidate, at zero confidence"
+    );
 }
