@@ -190,13 +190,17 @@ def _lower_enum_list(
     if not names or len(names) > caps.max_choice_options or not caps.supports_batch {
         return {};
     }
+    listed = ", ".join(names);
     out: dict[str, Question] = {};
     for name in names {
         text = described.get(name);
         yes = f"{name}: {text}" if text else name;
         out[name] = Question(
             kind=NOUL,
-            instructions=f"{instructions} Does {name} apply?",
+            instructions=(
+                f"{instructions} The possible values are: {listed}. "
+                f"Does {name} apply?"
+            ),
             criteria={"true": yes, "false": None}
         );
     }
