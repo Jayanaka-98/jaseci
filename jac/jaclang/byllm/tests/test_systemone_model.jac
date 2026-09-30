@@ -17,7 +17,7 @@ import from jaclang.byllm.exceptions {
     ConfigurationError,
     RateLimitError
 }
-import from jaclang.byllm.systemone { resolve_model_name }
+import from jaclang.byllm.systemone { Decision, resolve_model_name }
 import from jaclang.runtime.semantic { EnumInfo, FieldInfo, FunctionInfo, ParamInfo }
 
 
@@ -328,4 +328,18 @@ test "the async path serves and escalates the same way" {
     out2 = asyncio.run(m.ainvoke(mt));
     assert out2 is Priority.LOW , "low confidence must escalate on the async path too";
     assert len(rec.seen) == 1;
+}
+
+
+test "a Decision[T] call site gets the envelope with the endpoint's confidence" {
+    m = _Stub(model_name="systemone:typesafe/jev-latest");
+    m.script = [(200, _choice("HIGH", 0.93))];
+    dt = Decision.__class_getitem__(Priority);
+
+    out = m.invoke(_mt(dt, {"ticket": "down"}, _priority_info()));
+
+    assert isinstance(out, Decision) , f"expected a Decision, got {out!r}";
+    assert out.value is Priority.HIGH;
+    assert out.confidence == 0.93;
+    assert set(out.probabilities["value"].keys()) == {"LOW", "HIGH"};
 }

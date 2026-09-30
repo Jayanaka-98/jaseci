@@ -20,8 +20,23 @@ import from jaclang.byllm.llm { BaseLLM }
 import from jaclang.byllm.mtir { MTIR, MTRuntime }
 import from jaclang.byllm.types { Message, MessageRole }
 import from jaclang.byllm.exceptions { OutputConversionError }
-import from jaclang.byllm.systemone { ProviderCaps, SystemOneSpec, assemble, lower }
-import from jaclang.runtime.semantic { EnumInfo, FieldInfo, FunctionInfo, ParamInfo }
+import from jaclang.byllm.systemone {
+    Decision,
+    ProviderCaps,
+    ROUTE_SELECT_ATTR,
+    SystemOneSpec,
+    assemble,
+    lower,
+    wrap_result
+}
+import from jaclang.runtime.semantic {
+    ClassInfo,
+    EnumInfo,
+    FieldInfo,
+    FunctionInfo,
+    ParamInfo,
+    TypeForm
+}
 
 
 """How urgently a support ticket needs a human."""
@@ -32,6 +47,45 @@ enum Priority {
 
 
 enum Team { BILLING, SECURITY, PLATFORM }
+
+
+obj Triage {
+    has urgency: Priority,
+        needs_human: bool;
+}
+
+
+obj Note {
+    has title: str,
+        urgency: Priority;
+}
+
+
+def _triage_info -> FunctionInfo {
+    return FunctionInfo(
+        name="triage",
+        semstr="Triage the ticket",
+        params=[ParamInfo(name="ticket", semstr=None, type_info="str")],
+        return_type=ClassInfo(
+            name="Triage",
+            semstr=None,
+            fields=[
+                FieldInfo(
+                    name="urgency",
+                    semstr="How urgent the ticket is",
+                    type_info=_priority_info().return_type
+                ),
+                FieldInfo(
+                    name="needs_human",
+                    semstr="Whether a person must look at it",
+                    type_info="bool"
+                )
+            ],
+            base_classes=[],
+            methods=[]
+        )
+    );
+}
 
 
 def _stub(ticket: str) -> object {
@@ -98,15 +152,18 @@ def _bool_info(name: str, semstr: str) -> FunctionInfo {
 
 
 def _mt(
-    resp_type: (type | None),
+    resp_type: any,
     args: dict[any, any],
     info: (FunctionInfo | None),
     tools: list[any] = [],
-    stream: bool = False
+    stream: bool = False,
+    system: str = "You are an agent.",
+    with_ir: bool = True,
+    select: any = None
 ) -> MTRuntime {
-    return MTRuntime(
+    mt = MTRuntime(
         messages=[
-            Message(role=MessageRole.SYSTEM, content="You are an agent."),
+            Message(role=MessageRole.SYSTEM, content=system),
             Message(role=MessageRole.USER, content="Do the thing.")
         ],
         resp_type=resp_type,
@@ -114,7 +171,13 @@ def _mt(
         tools=tools,
         call_params={},
         mtir=MTIR(caller=_stub, args=args, call_params={}, ir_info=info)
+            if with_ir
+            else None
     );
+    if select is not None {
+        setattr(mt, ROUTE_SELECT_ATTR, select);
+    }
+    return mt;
 }
 
 
@@ -341,5 +404,166 @@ test "an ineligible call reaches the fallback with the prompt already built" {
     );
     assert len(_rec.seen[0]) >= 2 , (
         f"expected a system and a user message, got {_rec.seen[0]}"
+    );
+}
+
+
+def _priority_list_info -> FunctionInfo {
+    base = _priority_info();
+    return FunctionInfo(
+        name="rank_all",
+        semstr="Which priorities apply to the ticket",
+        params=base.params,
+        return_type=TypeForm(head="list", args=[base.return_type])
+    );
+}
+
+
+test "list[E] lowers to one noul per member, carrying each member's semstr" {
+    spec = _lowered(_mt(list[Priority], {"ticket": "x"}, _priority_list_info()));
+
+    assert spec.mode == "enum_list" , f"got {spec.mode!r}";
+    assert set(spec.questions.keys()) == {"LOW", "HIGH"} , (
+        f"one question per member, keyed by name: {spec.questions.keys()}"
+    );
+    q = spec.questions["LOW"];
+    assert q.kind == "noul";
+    assert q.criteria["true"] == "LOW: can wait until the next business day" , q.criteria;
+    assert q.instructions.startswith("Which priorities apply to the ticket") , q.instructions;
+    assert spec.resp_type is Priority , "the spec must carry the inner enum for reassembly";
+}
+
+
+test "list[E] assembles the members above 0.5, most probable first, at the least certain confidence" {
+    spec = _lowered(_mt(list[Priority], {"ticket": "x"}, _priority_list_info()));
+
+    (value, conf) = assemble(
+        spec,
+        {"LOW": {"type": "noul", "noul": 0.6}, "HIGH": {"type": "noul", "noul": 0.9}}
+    );
+    assert value == [Priority.HIGH, Priority.LOW] , f"most probable first, got {value!r}";
+    assert abs(conf - 0.2) < 1e-9 , f"min(|2p-1|) over members is 0.2, got {conf}";
+
+    (value2, conf2) = assemble(
+        spec,
+        {"LOW": {"type": "noul", "noul": 0.3}, "HIGH": {"type": "noul", "noul": 0.8}}
+    );
+    assert value2 == [Priority.HIGH] , f"only members above 0.5, got {value2!r}";
+    assert abs(conf2 - 0.4) < 1e-9 , conf2;
+}
+
+
+test "select=1 pinned by route_visit asks a single choice and returns a one-element list" {
+    spec = _lowered(
+        _mt(list[Priority], {"ticket": "x"}, _priority_list_info(), select=1)
+    );
+
+    assert spec.mode == "enum" and spec.as_list , (
+        f"select=1 must lower to one choice, got mode={spec.mode!r} as_list={spec.as_list}"
+    );
+    assert list(spec.questions.values())[0].kind == "choice";
+    (value, conf) = assemble(
+        spec, {"value": {"type": "choice", "choice": "HIGH", "confidence": 0.8}}
+    );
+    assert value == [Priority.HIGH] , f"got {value!r}";
+    assert conf == 0.8;
+}
+
+
+test "with no IR the system prompt is the instruction and the messages are the state" {
+    spec = _lowered(
+        _mt(
+            list[Priority],
+            {},
+            None,
+            system="You are routing a graph walker. Choose by handle.",
+            with_ir=False
+        )
+    );
+
+    q = spec.questions["LOW"];
+    assert q.instructions.startswith("You are routing a graph walker") , q.instructions;
+    assert "context" in spec.state and "Do the thing." in spec.state["context"] , spec.state;
+    assert q.criteria["true"] == "LOW" , "no IR means labels only, no descriptions";
+}
+
+
+test "a closed-set obj lowers to one question per field in a single request" {
+    spec = _lowered(_mt(Triage, {"ticket": "the site is down"}, _triage_info()));
+
+    assert spec.mode == "record" , spec.mode;
+    assert set(spec.questions.keys()) == {"urgency", "needs_human"} , (
+        spec.questions.keys()
+    );
+    assert spec.questions["urgency"].kind == "choice";
+    assert spec.questions["urgency"].instructions == "How urgent the ticket is" , (
+        "the field's semstr is that question's instruction"
+    );
+    assert spec.questions["urgency"].criteria["HIGH"] == "needs attention right now" , (
+        "member semstrs reach the criteria through the field's EnumInfo"
+    );
+    assert spec.questions["needs_human"].kind == "noul";
+    assert spec.questions["needs_human"].instructions
+        == "Whether a person must look at it";
+}
+
+
+test "the per-field answers are rebuilt into the declared obj at the least certain confidence" {
+    spec = _lowered(_mt(Triage, {"ticket": "x"}, _triage_info()));
+
+    (value, conf) = assemble(
+        spec,
+        {
+            "urgency": {"type": "choice", "choice": "HIGH", "confidence": 0.9},
+            "needs_human": {"type": "noul", "noul": 0.8}
+        }
+    );
+    assert isinstance(value, Triage) , f"expected a Triage, got {value!r}";
+    assert value.urgency is Priority.HIGH and value.needs_human is True , value;
+    assert abs(conf - 0.6) < 1e-9 , f"min(0.9, |2*0.8-1|=0.6) is 0.6, got {conf}";
+}
+
+
+test "an obj with an open-ended field is refused whole, not partially asked" {
+    info = FunctionInfo(
+        name="note", semstr="Make a note", params=[], return_type="Note"
+    );
+    assert lower(_mt(Note, {}, info)) is None , (
+        "a str field cannot be asked, so the whole object goes to the fallback"
+    );
+}
+
+
+test "Decision[T] lowers T and marks the spec so the model wraps the answer" {
+    dt = Decision.__class_getitem__(Priority);
+    info = FunctionInfo(
+        name="rank",
+        semstr="Rank how urgent the ticket is",
+        params=[ParamInfo(name="ticket", semstr=None, type_info="str")],
+        return_type=TypeForm(head="Decision", args=[_priority_info().return_type])
+    );
+    spec = _lowered(_mt(dt, {"ticket": "x"}, info));
+
+    assert spec.mode == "enum" and spec.wrap_decision , (spec.mode, spec.wrap_decision);
+    q = list(spec.questions.values())[0];
+    assert q.criteria["LOW"] == "can wait until the next business day" , (
+        "the inner EnumInfo is unwrapped from the Decision TypeForm"
+    );
+
+    (value, conf) = assemble(
+        spec, {"value": {"type": "choice", "choice": "HIGH", "confidence": 0.93}}
+    );
+    wrapped = wrap_result(spec, value, conf, {"value": {"HIGH": 0.965, "LOW": 0.035}});
+    assert isinstance(wrapped, Decision) , f"got {wrapped!r}";
+    assert wrapped.value is Priority.HIGH and wrapped.confidence == 0.93;
+    assert wrapped.probabilities["value"]["HIGH"] == 0.965;
+}
+
+
+test "Decision[T] is one class per T, and a bare Decision is refused" {
+    assert Decision.__class_getitem__(Priority) is Decision.__class_getitem__(Priority);
+    assert Decision.__class_getitem__(Priority) is not Decision.__class_getitem__(Team);
+    assert lower(_mt(Decision, {"ticket": "x"}, _priority_info())) is None , (
+        "Decision without a type parameter cannot be lowered"
     );
 }

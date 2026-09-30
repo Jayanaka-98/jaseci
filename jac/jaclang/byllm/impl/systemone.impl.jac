@@ -53,6 +53,19 @@ impl instructions_of(mt_run: MTRuntime) -> str {
             return str(owner_info.name).strip("_").replace("_", " ");
         }
     }
+    for msg in mt_run.messages {
+        if isinstance(msg, dict) {
+            role = msg.get("role");
+            content = msg.get("content");
+        } else {
+            role = msg?.role;
+            content = msg?.content;
+        }
+        role_s = str(role?.value or role or "");
+        if role_s == "system" and isinstance(content, str) and content.strip() {
+            return content.strip();
+        }
+    }
     return "Choose the value the program should receive.";
 }
 
@@ -140,6 +153,158 @@ def _lower_bool(instructions: str) -> Question {
 }
 
 
+def _list_enum_inner(resp_type: object) -> (type | None) {
+    import from typing { get_args, get_origin }
+
+    if get_origin(resp_type) is not list {
+        return None;
+    }
+    args = get_args(resp_type);
+    if len(args) != 1 {
+        return None;
+    }
+    inner = args[0];
+    if isinstance(inner, type) and issubclass(inner, Enum) {
+        return inner;
+    }
+    return None;
+}
+
+
+def _list_inner_info(info: object) -> object {
+    if isinstance(info, TypeForm) and info.head == "list" and info.args {
+        return info.args[0];
+    }
+    return None;
+}
+
+
+def _lower_enum_list(
+    inner: type, enum_info: (EnumInfo | None), instructions: str, caps: ProviderCaps
+) -> dict[str, Question] {
+    described: dict[str, any] = {};
+    for member in ((enum_info.members if enum_info else None) or []) {
+        described[member.name] = member.semstr or None;
+    }
+    names = list(getattr(inner, "__members__", {}).keys());
+    if not names or len(names) > caps.max_choice_options or not caps.supports_batch {
+        return {};
+    }
+    out: dict[str, Question] = {};
+    for name in names {
+        text = described.get(name);
+        yes = f"{name}: {text}" if text else name;
+        out[name] = Question(
+            kind=NOUL,
+            instructions=f"{instructions} Does {name} apply?",
+            criteria={"true": yes, "false": None}
+        );
+    }
+    return out;
+}
+
+
+def _unwrap_decision_info(info: object) -> object {
+    if isinstance(info, TypeForm) and info.head == "Decision" and info.args {
+        return info.args[0];
+    }
+    return info;
+}
+
+
+def _record_fields(t: object) -> dict[str, any] {
+    import sys;
+    import from typing { get_type_hints }
+    import from jaclang.runtime.object_interop { fields as record_fields, is_record }
+
+    if not isinstance(t, type) {
+        return {};
+    }
+    declared: dict[str, any] = {};
+    try {
+        if is_record(t) {
+            for f in record_fields(t) {
+                declared[str(f.name)] = f?.type;
+            }
+        }
+    } except Exception {
+        declared = {};
+    }
+    resolved: dict[str, any] = {};
+    try {
+        resolved = dict(get_type_hints(t));
+    } except Exception {
+        resolved = {};
+    }
+    module_ns: dict[str, any] = {};
+    mod = sys.modules.get(str(getattr(t, "__module__", "")));
+    if mod is not None {
+        module_ns = dict(vars(mod));
+    }
+    out: dict[str, any] = {};
+    for (k, v) in (declared or resolved).items() {
+        if str(k).startswith("_") {
+            continue;
+        }
+        hint = resolved.get(k);
+        if hint is None and isinstance(v, str) {
+            hint = module_ns.get(v)
+                or {"bool": bool, "int": int, "str": str, "float": float}.get(v);
+        }
+        out[str(k)] = hint if hint is not None else v;
+    }
+    return out;
+}
+
+
+def _is_record_type(t: object) -> bool {
+    if not isinstance(t, type) {
+        return False;
+    }
+    if issubclass(t, (Enum, Decision, str, int, float, bool, list, dict, tuple, set)) {
+        return False;
+    }
+    return bool(_record_fields(t));
+}
+
+
+def _lower_record(
+    t: type, info: object, instructions: str, caps: ProviderCaps
+) -> dict[str, Question] {
+    hints = _record_fields(t);
+    if not hints or not caps.supports_batch {
+        return {};
+    }
+    described: dict[str, any] = {};
+    if isinstance(info, ClassInfo) {
+        for f in (info.fields or []) {
+            described[f.name] = f;
+        }
+    }
+    out: dict[str, Question] = {};
+    for (fname, ftype) in hints.items() {
+        fi = described.get(fname);
+        f_sem = fi.semstr if fi is not None else None;
+        f_instr = f_sem or f"{instructions} What is {fname}?";
+        if ftype is bool {
+            out[fname] = Question(kind=NOUL, instructions=f_instr, criteria=None);
+        } elif isinstance(ftype, type) and issubclass(ftype, Enum) {
+            einfo = fi.type_info if fi is not None else None;
+            q = _lower_enum(
+                ftype, einfo if isinstance(einfo, EnumInfo) else None, f_instr, caps
+            );
+            if q is None {
+                return {};
+            }
+            out[fname] = q;
+        } else {
+            return {};
+        }
+    }
+    return out;
+}
+
+
 impl lower(
     mt_run: MTRuntime, caps: (ProviderCaps | None) = None
 ) -> (SystemOneSpec | None) {
@@ -151,29 +316,70 @@ impl lower(
         return None;
     }
 
-    resp_type = mt_run.resp_type;
-    if resp_type is None or resp_type is str {
+    declared = mt_run.resp_type;
+    if declared is None or declared is str {
         return None;
     }
 
-    instructions = instructions_of(mt_run);
-    question: (Question | None) = None;
-    mode = "";
-
-    if resp_type is bool {
-        question = _lower_bool(instructions);
-        mode = MODE_BOOL;
-    } elif isinstance(resp_type, type) and issubclass(resp_type, Enum) {
-        question = _lower_enum(
-            resp_type,
-            enum_info_of(resp_type, return_info_of(mt_run)),
-            instructions,
-            caps
-        );
-        mode = MODE_ENUM;
+    target: any = declared;
+    wrap = False;
+    if isinstance(declared, type) and issubclass(declared, Decision) {
+        target = declared?._jac_inner;
+        if target is None or target is str {
+            return None;
+        }
+        wrap = True;
     }
 
-    if question is None {
+    raw_info = return_info_of(mt_run);
+    info = _unwrap_decision_info(raw_info) if wrap else raw_info;
+    instructions = instructions_of(mt_run);
+    questions: dict[str, Question] = {};
+    mode = "";
+    as_list = False;
+    carried: any = target;
+
+    if target is bool {
+        questions[ANSWER_KEY] = _lower_bool(instructions);
+        mode = MODE_BOOL;
+    } elif isinstance(target, type) and issubclass(target, Enum) {
+        single = _lower_enum(target, enum_info_of(target, info), instructions, caps);
+        if single is not None {
+            questions[ANSWER_KEY] = single;
+            mode = MODE_ENUM;
+        }
+    } else {
+        inner = _list_enum_inner(target);
+        if inner is not None {
+            carried = inner;
+            enum_info = enum_info_of(inner, _list_inner_info(info));
+            select = getattr(mt_run, ROUTE_SELECT_ATTR, "all");
+            if isinstance(select, int)
+                and not isinstance(select, bool)
+                and select == 1 {
+                one = _lower_enum(inner, enum_info, instructions, caps);
+                if one is not None {
+                    questions[ANSWER_KEY] = one;
+                    mode = MODE_ENUM;
+                    as_list = True;
+                }
+            } else {
+                many = _lower_enum_list(inner, enum_info, instructions, caps);
+                if many {
+                    questions = many;
+                    mode = MODE_ENUM_LIST;
+                }
+            }
+        } elif _is_record_type(target) {
+            per_field = _lower_record(target, info, instructions, caps);
+            if per_field {
+                questions = per_field;
+                mode = MODE_RECORD;
+            }
+        }
+    }
+
+    if not questions {
         return None;
     }
 
@@ -187,14 +393,68 @@ impl lower(
 
     return SystemOneSpec(
         state=state,
-        questions={ANSWER_KEY: question},
+        questions=questions,
         mode=mode,
-        resp_type=mt_run.resp_type
+        resp_type=carried,
+        as_list=as_list,
+        wrap_decision=wrap
     );
 }
 
 
 impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, float] {
+    if spec.mode == MODE_ENUM_LIST {
+        members = getattr(spec.resp_type, "__members__", {});
+        picked: list[tuple[float, int, object]] = [];
+        worst = 1.0;
+        for (i, (name, member)) in enumerate(members.items()) {
+            a = answers.get(name);
+            p = float(a.get("noul", 0.0)) if isinstance(a, dict) else 0.0;
+            worst = min(worst, abs(2.0 * p - 1.0));
+            if p > 0.5 {
+                picked.append((p, -i, member));
+            }
+        }
+        picked.sort(reverse=True);
+        return ([m for (_p, _i, m) in picked], worst);
+    }
+
+    if spec.mode == MODE_RECORD {
+        ctor = spec.resp_type;
+        if ctor is None {
+            raise OutputConversionError("record spec carries no type to rebuild");
+        }
+        hints = _record_fields(ctor);
+        kwargs: dict[str, any] = {};
+        worst = 1.0;
+        for (fname, q) in spec.questions.items() {
+            a = answers.get(fname);
+            if not isinstance(a, dict) {
+                raise OutputConversionError(
+                    f"System One response carried no answer for field {fname!r}"
+                );
+            }
+            ftype = hints.get(fname);
+            if q.kind == NOUL {
+                p = float(a.get("noul", 0.0));
+                kwargs[fname] = p > 0.5;
+                worst = min(worst, abs(2.0 * p - 1.0));
+            } else {
+                label = a.get("choice");
+                members = getattr(ftype, "__members__", {});
+                if label not in members {
+                    raise OutputConversionError(
+                        f"System One returned label {label!r} for field {fname!r}, "
+                        f"which is not a member of {getattr(ftype, '__name__', '?')}"
+                    );
+                }
+                kwargs[fname] = members[label];
+                worst = min(worst, float(a.get("confidence", 0.0)));
+            }
+        }
+        return (ctor(**kwargs), worst);
+    }
+
     answer = answers.get(ANSWER_KEY);
     if not isinstance(answer, dict) {
         raise OutputConversionError(
@@ -204,7 +464,6 @@ impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, flo
 
     if spec.mode == MODE_BOOL {
         p = float(answer.get("noul", 0.0));
-
         return (p > 0.5, abs(2.0 * p - 1.0));
     }
 
@@ -217,10 +476,24 @@ impl assemble(spec: SystemOneSpec, answers: dict[str, any]) -> tuple[object, flo
                 f"{getattr(spec.resp_type, '__name__', '?')}"
             );
         }
-        return (members[name], float(answer.get("confidence", 0.0)));
+        chosen = members[name];
+        return (
+            [chosen] if spec.as_list else chosen,
+            float(answer.get("confidence", 0.0))
+        );
     }
 
     raise OutputConversionError(f"unknown System One lowering mode {spec.mode!r}");
+}
+
+
+impl wrap_result(
+    spec: SystemOneSpec, value: object, confidence: float, probs: dict[str, any]
+) -> object {
+    if not spec.wrap_decision {
+        return value;
+    }
+    return Decision(value=value, confidence=confidence, probabilities=probs);
 }
 
 

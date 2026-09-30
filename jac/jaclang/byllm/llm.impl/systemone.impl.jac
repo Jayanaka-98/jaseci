@@ -210,7 +210,7 @@ impl SystemOneModel._finish(
         and confidence < self.min_confidence
         and self.fallback is not None
     );
-    return (value, escalate);
+    return (wrap_result(spec, value, confidence, probs), escalate);
 }
 
 

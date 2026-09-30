@@ -23,7 +23,8 @@ import from jaclang.byllm.systemone {
     distribution,
     lower,
     resolve_api_key,
-    resolve_model_name
+    resolve_model_name,
+    wrap_result
 }
 import from jaclang.byllm.exceptions {
     ByLLMError,

@@ -1,4 +1,5 @@
-import from jaclang.byllm.llm { MockLLM, Model, ModelPool }
+import from jaclang.byllm.llm { MockLLM, Model, ModelPool, SystemOneModel }
+import from jaclang.byllm.systemone { Decision }
 import from jaclang.byllm.mtir { MTIR, MTRuntime }
 import from jaclang.runtime.runtime { JacRuntime }
 import from jaclang.byllm.types {
@@ -53,6 +54,8 @@ glob `by = JacRuntime.`by,
          'MockError',
          'Model',
          'ModelPool',
+         'Decision',
+         'SystemOneModel',
          'MTIR',
          'MTRuntime',
          'StreamEvent',

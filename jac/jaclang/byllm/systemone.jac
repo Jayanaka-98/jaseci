@@ -1,5 +1,11 @@
 import from enum { Enum }
-import from jaclang.runtime.semantic { EnumInfo, FunctionInfo, VarInfo }
+import from jaclang.runtime.semantic {
+    ClassInfo,
+    EnumInfo,
+    FunctionInfo,
+    TypeForm,
+    VarInfo
+}
 import from jaclang.byllm.mtir { MTRuntime }
 import from jaclang.byllm.exceptions { OutputConversionError }
 
@@ -8,12 +14,16 @@ glob CHOICE = "choice",
      SCORE = "score";
 
 glob MODE_ENUM = "enum",
-     MODE_BOOL = "bool";
+     MODE_BOOL = "bool",
+     MODE_ENUM_LIST = "enum_list",
+     MODE_RECORD = "record";
 
 glob ANSWER_KEY = "value";
 
 glob SYSTEMONE_PREFIX = "systemone:",
      DEFAULT_PROVIDER = "typesafe";
+
+glob ROUTE_SELECT_ATTR = "_systemone_select";
 
 
 obj ProviderCaps {
@@ -41,9 +51,32 @@ obj SystemOneSpec {
     has state: dict[str, any],
         questions: dict[str, Question],
         mode: str,
-        resp_type: (type | None) = None;
+        resp_type: (type | None) = None,
+        as_list: bool = False,
+        wrap_decision: bool = False;
 
     def to_payload(model: str) -> dict[str, any];
+}
+
+
+obj Decision {
+    has value: any = None,
+        confidence: float = 0.0,
+        probabilities: dict[str, any] = {};
+
+    static has _views: dict[int, type] = {};
+
+    @classmethod
+    def __class_getitem__(cls: type, elem: any) -> type {
+        key = id(elem);
+        cached = Decision._views.get(key);
+        if cached is None {
+            name = getattr(elem, "__name__", str(elem));
+            cached = `type(f"Decision[{name}]", (Decision, ), {"_jac_inner": elem});
+            Decision._views[key] = cached;
+        }
+        return cached;
+    }
 }
 
 
@@ -73,3 +106,7 @@ def resolve_model_name(name: str) -> tuple[str, str];
 def resolve_api_key(caps: ProviderCaps, explicit: str = "") -> str;
 
 def distribution(spec: SystemOneSpec, answers: dict[str, any]) -> dict[str, any];
+
+def wrap_result(
+    spec: SystemOneSpec, value: object, confidence: float, probs: dict[str, any]
+) -> object;
