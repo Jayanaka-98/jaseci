@@ -524,9 +524,12 @@ glob llm = Model(
 );
 ```
 
-- A call that cannot be answered is handed to `fallback` unchanged; the fallback sees the same prompt it would have without the System One model.
+- A call that cannot be answered is handed to `fallback` unchanged; the fallback sees the same prompt it would have without the System One model. Besides the return types above, this covers calls that pass `conversation=` or a per-call `system_prompt=`, which a System One state cannot express.
 - An answer whose confidence is below `min_confidence` is discarded and the call is re-asked of `fallback`.
+- If the endpoint is unreachable, overloaded or rejects the request, the call goes to `fallback`. A rejected API key (401) is raised instead, since it is a configuration error.
 - With no `fallback`, a call that cannot be answered raises `ConfigurationError`.
+
+The state sent to the endpoint holds the call's arguments, any `incl_info`, and, for a method, the receiver as `self`. The API key comes from the provider's environment variable or an `api_key=` passed to this `Model`; the project-wide `[byllm.model] api_key` belongs to your chat provider and is never sent.
 
 `SystemOneModel(fallback=..., min_confidence=...)` takes the same settings as constructor arguments.
 
@@ -541,6 +544,8 @@ with entry {
     # d.probabilities: the distribution per question
 }
 ```
+
+When the fallback answered, `d.answered_by` is `"fallback"`, `d.probabilities` is empty, and `d.confidence` is the System One confidence that caused the escalation (0 if the call was never answered by it).
 
 For a single choice, confidence is `(n * p_max - 1) / (n - 1)` over its `n` options; for a yes/no it is `|2p - 1|`; for a list or object it is that of the least certain question. Every call also records its tokens, confidence and distribution in telemetry under `call_kind: "systemone"`.
 

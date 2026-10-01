@@ -5,6 +5,7 @@ refused or escalated to the fallback chat model; how `visit ... by` honours `sel
 """
 
 import asyncio;
+import os;
 import from jaclang.byllm.lib { Decision, MockLLM, MockSystemOne, Model }
 import from jaclang.byllm.llm { SystemOneModel }
 import from jaclang.byllm.mtir { MTIR, MTRuntime }
@@ -45,6 +46,17 @@ enum Sev { LOW = 1, HIGH = 2, SEVERE = 2 }
 obj Triage {
     has urgency: Priority,
         needs_human: bool;
+}
+
+
+glob _ticket_so1 = MockSystemOne();
+
+
+obj Ticket {
+    has text: str,
+        tier: Priority = Priority.HIGH;
+
+    def rank -> Priority by _ticket_so1();
 }
 
 
@@ -430,4 +442,105 @@ test "field semstrs word each question of an obj, and TypeForm is unwrapped" {
     enveloped = lower(_site(Decision.__class_getitem__(Priority), {}, wrapped));
     assert enveloped is not None and enveloped.wrap_decision;
     assert enveloped.questions["value"].criteria["LOW"] == "can wait";
+}
+
+
+test "Decision[T] survives the fallback: escalation, refusal and an outage all return the envelope" {
+    fb = MockLLM(outputs=[Priority.LOW, Priority.LOW]);
+    so1 = MockSystemOne(
+        answers=[choose("HIGH", 0.3), (503, {"raw": "down"}), (503, {}), (503, {})],
+        fallback=fb,
+        min_confidence=0.7
+    );
+
+    def rank(ticket: str) -> Decision[Priority] by so1();
+
+    escalated = rank("hmm");
+    assert isinstance(escalated, Decision) and escalated.value is Priority.LOW , (
+        f"the fallback's answer comes back in the envelope, got {escalated!r}"
+    );
+    assert escalated.answered_by == "fallback" and escalated.confidence == 0.3 , (
+        "it says who answered and keeps the confidence that triggered escalation"
+    );
+
+    outage = rank("the site is down");
+    assert isinstance(outage, Decision) and outage.value is Priority.LOW , (
+        f"an unreachable endpoint routes to the fallback, got {outage!r}"
+    );
+    assert outage.answered_by == "fallback" and outage.confidence == 0.0;
+}
+
+
+test "a rejected key is raised, not routed to the fallback" {
+    so1 = MockSystemOne(answers=[(401, {"error": "bad key"})], fallback=MockLLM());
+
+    raised = False;
+    try {
+        so1.invoke(mk_run(resp_type=Priority));
+    } except AuthenticationError {
+        raised = True;
+    }
+    assert raised , "a bad key is a configuration bug; silent rerouting would hide it";
+}
+
+
+test "the state carries incl_info and the receiver, as the chat prompt does" {
+    so1 = MockSystemOne(answers=[choose("HIGH", 0.9)]);
+
+    def rank(ticket: str) -> Priority by so1(incl_info={"customer_tier": "platinum"});
+
+    rank("x");
+    assert so1.seen[0]["state"] == {"ticket": "x", "customer_tier": "platinum"} , (
+        so1.seen[0]["state"]
+    );
+
+    _ticket_so1.answers = [choose("LOW", 0.9)];
+    Ticket(text="refund please").rank();
+    assert _ticket_so1.seen[-1]["state"]["self"]
+        == {"text": "refund please", "tier": "HIGH"} , f"a method's receiver is part of the state, got {_ticket_so1.seen[
+        -1
+    ]['state']}";
+    assert questions_of(_ticket_so1, len(_ticket_so1.seen) - 1)["value"]["instructions"]
+        == "rank" , (
+        "with no IR the function's name, not the system persona, is the instruction"
+    );
+}
+
+
+test "a call carrying conversation history or its own system prompt goes to the fallback" {
+    history: list[dict[str, any]] = [];
+    fb = MockLLM(outputs=[Priority.LOW, Priority.HIGH]);
+    so1 = MockSystemOne(fallback=fb);
+
+    def chat_rank(ticket: str) -> Priority by so1(conversation=history);
+    def styled_rank(ticket: str) -> Priority by so1(system_prompt="Be strict.");
+
+    assert chat_rank("x") is Priority.LOW;
+    assert styled_rank("y") is Priority.HIGH;
+    assert so1.seen == [] , "neither can be expressed as a System One state";
+    assert history , "the fallback records the turn in the caller's history";
+}
+
+
+test "a systemone: model never inherits the chat provider's key" {
+    before = os.environ.get("TYPESAFE_API_KEY");
+    os.environ["TYPESAFE_API_KEY"] = "ts-from-env";
+    try {
+        configured = Model(
+            model_name="systemone:typesafe/jev-latest", config={"api_key": "sk-openai"}
+        )._so1_delegate;
+        assert configured is not None and configured.api_key == "ts-from-env" , (
+            "a model-config api_key belongs to the chat provider and must not be sent"
+        );
+        explicit = Model(
+            model_name="systemone:typesafe/jev-latest", api_key="ts-explicit"
+        )._so1_delegate;
+        assert explicit is not None and explicit.api_key == "ts-explicit";
+    } finally {
+        if before is None {
+            del os.environ["TYPESAFE_API_KEY"];
+        } else {
+            os.environ["TYPESAFE_API_KEY"] = before;
+        }
+    }
 }

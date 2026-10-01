@@ -53,6 +53,12 @@ impl instructions_of(mt_run: MTRuntime) -> str {
             return str(owner_info.name).strip("_").replace("_", " ");
         }
     }
+    if owner is not None {
+        name = str(getattr(owner.caller, "__name__", "") or "");
+        if name {
+            return name.strip("_").replace("_", " ");
+        }
+    }
     for msg in mt_run.messages {
         if isinstance(msg, dict) {
             role = msg.get("role");
@@ -71,14 +77,29 @@ impl instructions_of(mt_run: MTRuntime) -> str {
 
 
 def _state_value(value: object) -> object {
+    import from jaclang.runtime.object_interop { fields as record_fields, is_record }
+
     if value is None or isinstance(value, (str, int, float, bool)) {
         return value;
+    }
+    if isinstance(value, Enum) {
+        return value.name;
     }
     if isinstance(value, dict) {
         return {str(k): _state_value(v) for (k, v) in value.items()};
     }
     if isinstance(value, (list, tuple, set)) {
         return [_state_value(v) for v in value];
+    }
+    if not isinstance(value, type) and is_record(value) {
+        out: dict[str, any] = {};
+        for f in record_fields(value) {
+            name = str(f.name);
+            if not name.startswith("_") {
+                out[name] = _state_value(getattr(value, name, None));
+            }
+        }
+        return out;
     }
     return repr(value);
 }
@@ -122,6 +143,20 @@ impl build_state(mt_run: MTRuntime) -> (dict[str, any] | None) {
             name = f"arg{idx}";
         }
         state[str(name)] = _state_value(value);
+    }
+
+    caller = owner.caller;
+    if isinstance(caller, MethodType) {
+        state["self"] = _state_value(caller.__self__);
+    }
+    incl_info = (owner.call_params or {}).get("incl_info");
+    if isinstance(incl_info, dict) {
+        for (key, value) in incl_info.items() {
+            if isinstance(value, Media) {
+                return None;
+            }
+            state[str(key)] = _state_value(value);
+        }
     }
     return state;
 }
@@ -331,6 +366,13 @@ impl lower(
 
     declared = mt_run.resp_type;
     if declared is None or declared is str {
+        return None;
+    }
+
+    site_params = dict(mt_run.mtir.call_params or {}) if mt_run.mtir else {};
+    site_params.update(mt_run.call_params or {});
+    if site_params.get("conversation") is not None
+        or site_params.get("system_prompt") {
         return None;
     }
 

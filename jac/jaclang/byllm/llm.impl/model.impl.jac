@@ -14,6 +14,7 @@ def _configure_litellm {
 
 
 impl Model.postinit -> None {
+    so1_key = self.api_key;
     self.proxy = bool(self.config.get("proxy", _model_config.get("proxy", False)));
     self.http_client = bool(
         self.config.get("http_client", _model_config.get("http_client", False))
@@ -37,10 +38,15 @@ impl Model.postinit -> None {
         );
     }
     if self.model_name.startswith(SYSTEMONE_PREFIX) {
+        so1_config = {
+            k: v
+            for (k, v) in self.config.items()
+            if k != "api_key"
+        };
         self._so1_delegate = SystemOneModel(
             model_name=self.model_name,
-            config=self.config,
-            api_key=self.api_key,
+            config=so1_config,
+            api_key=so1_key,
             api_base=self.api_base,
             call_params=self.call_params
         );

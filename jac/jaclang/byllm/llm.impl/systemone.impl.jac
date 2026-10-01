@@ -222,6 +222,57 @@ impl SystemOneModel._no_fallback(reason: str) -> ConfigurationError {
 }
 
 
+impl SystemOneModel._unwrap_for_fallback(mt_run: MTRuntime) -> (type | None) {
+    original: (type | None) = mt_run.resp_type;
+    probe: object = original;
+    if isinstance(probe, type) and issubclass(probe, Decision) {
+        mt_run.resp_type = probe?._jac_inner;
+    }
+    return original;
+}
+
+
+impl SystemOneModel._rewrap(
+    original: (type | None), value: object, confidence: float
+) -> object {
+    if not (isinstance(original, type) and issubclass(original, Decision)) {
+        return value;
+    }
+    if isinstance(value, Decision) {
+        return value;
+    }
+    return Decision(
+        value=value, confidence=confidence, probabilities={}, answered_by="fallback"
+    );
+}
+
+
+impl SystemOneModel._via_fallback(
+    fb: BaseLLM, mt_run: MTRuntime, confidence: float
+) -> any {
+    original = self._unwrap_for_fallback(mt_run);
+    try {
+        value = fb.invoke(mt_run);
+    } finally {
+        mt_run.resp_type = original;
+    }
+    return self._rewrap(original, value, confidence);
+}
+
+
+impl SystemOneModel._avia_fallback(
+    fb: BaseLLM, mt_run: MTRuntime, confidence: float
+) -> any {
+    original = self._unwrap_for_fallback(mt_run);
+    try {
+        value = await fb.ainvoke(mt_run);
+    } finally {
+        mt_run.resp_type = original;
+    }
+    return self._rewrap(original, value, confidence);
+}
+
+
 impl SystemOneModel.invoke(mt_run: MTRuntime) -> any {
     fb = self.fallback;
     spec = lower(mt_run, self._caps);
@@ -229,12 +280,24 @@ impl SystemOneModel.invoke(mt_run: MTRuntime) -> any {
         if fb is None {
             raise self._no_fallback("the return type or call shape is not closed-set");
         }
-        return fb.invoke(mt_run);
+        return self._via_fallback(fb, mt_run, 0.0);
     }
-    body = self._post(spec.to_payload(self._so1_model));
+    body: dict[str, any] = {};
+    try {
+        body = self._post(spec.to_payload(self._so1_model));
+    } except AuthenticationError {
+        raise;
+    } except ByLLMError {
+        if fb is None {
+            raise;
+        }
+        return self._via_fallback(fb, mt_run, 0.0);
+    }
     (value, escalate) = self._finish(mt_run, spec, body);
     if escalate and fb is not None {
-        return fb.invoke(mt_run);
+        return self._via_fallback(
+            fb, mt_run, float(getattr(mt_run, "_so1_confidence", 0.0))
+        );
     }
     return value;
 }
@@ -247,12 +310,24 @@ impl SystemOneModel.ainvoke(mt_run: MTRuntime) -> any {
         if fb is None {
             raise self._no_fallback("the return type or call shape is not closed-set");
         }
-        return await fb.ainvoke(mt_run);
+        return await self._avia_fallback(fb, mt_run, 0.0);
     }
-    body = await self._apost(spec.to_payload(self._so1_model));
+    body: dict[str, any] = {};
+    try {
+        body = await self._apost(spec.to_payload(self._so1_model));
+    } except AuthenticationError {
+        raise;
+    } except ByLLMError {
+        if fb is None {
+            raise;
+        }
+        return await self._avia_fallback(fb, mt_run, 0.0);
+    }
     (value, escalate) = self._finish(mt_run, spec, body);
     if escalate and fb is not None {
-        return await fb.ainvoke(mt_run);
+        return await self._avia_fallback(
+            fb, mt_run, float(getattr(mt_run, "_so1_confidence", 0.0))
+        );
     }
     return value;
 }

@@ -8,6 +8,7 @@ import from jaclang.runtime.semantic {
 }
 import from jaclang.byllm.mtir { MTRuntime }
 import from jaclang.byllm.exceptions { OutputConversionError }
+import from types { MethodType }
 
 glob CHOICE = "choice",
      NOUL = "noul",
@@ -63,7 +64,8 @@ obj SystemOneSpec {
 obj Decision {
     has value: any = None,
         confidence: float = 0.0,
-        probabilities: dict[str, any] = {};
+        probabilities: dict[str, any] = {},
+        answered_by: str = "systemone";
 
     static has _views: dict[int, type] = {};
 

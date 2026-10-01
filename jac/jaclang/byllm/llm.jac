@@ -15,6 +15,7 @@ import from jaclang.byllm._optdeps.litellm { litellm, _disable_debugging }
 import from jaclang.byllm._optdeps.openai { openai, OpenAI, AsyncOpenAI }
 import from jaclang.project.capabilities { require_optional }
 import from jaclang.byllm.systemone {
+    Decision,
     SYSTEMONE_PREFIX,
     ProviderCaps,
     SystemOneSpec,
@@ -319,6 +320,10 @@ obj SystemOneModel(BaseLLM) {
     ) -> None;
 
     def _no_fallback(reason: str) -> ConfigurationError;
+    def _unwrap_for_fallback(mt_run: MTRuntime) -> (type | None);
+    def _rewrap(original: (type | None), value: object, confidence: float) -> object;
+    def _via_fallback(fb: BaseLLM, mt_run: MTRuntime, confidence: float) -> any;
+    async def _avia_fallback(fb: BaseLLM, mt_run: MTRuntime, confidence: float) -> any;
 }
 
 
